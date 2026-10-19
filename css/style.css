@@ -207,6 +207,9 @@ h3.label { margin: 28px 0 10px; }
 .sheet-row.targeted { border: 1px solid var(--accent); background: rgba(255, 138, 31, 0.1); }
 .sheet-row.placeable { border: 1px solid var(--kc); background: color-mix(in srgb, var(--kc) 10%, transparent); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kc) 22%, transparent); } }
+.sheet-row.moving { border: 1px solid var(--accent); background: rgba(255, 138, 31, 0.16); box-shadow: 0 0 0 3px rgba(255, 138, 31, 0.15); }
+.move-hint { margin: 8px 8px 0; padding: 8px 10px; border-radius: 10px; font-size: 12px; background: rgba(255, 138, 31, 0.1); border: 1px solid rgba(255, 138, 31, 0.35); }
+.move-hint.subtle { background: none; border-style: dashed; border-color: var(--border); color: var(--muted); }
 .sr-num { width: 26px; flex: none; text-align: center; font-size: 12px; font-weight: 800; color: var(--muted); }
 .sheet-row .chip { width: 44px; text-align: center; flex: none; }
 .sr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }

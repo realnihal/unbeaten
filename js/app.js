@@ -59,8 +59,34 @@ function newDraft() {
   if (S.settings.impact) slots.push({ idx: slots.length, type: 'IMP', pick: null });
   S.draft = {
     slots, rerolls: DIFFICULTY[S.settings.difficulty].rerolls, rerollsUsed: 0,
-    spin: null, spinning: false, selected: null, target: null, sort: 'rating',
+    spin: null, spinning: false, selected: null, target: null, moving: null, sort: 'rating',
   };
+}
+
+const canPlay = (p, type) => type === 'IMP' || p.slots.includes(type);
+
+// Drafted players can be moved at any time except mid-spin, while choosing a squad player,
+// or while a Position First spin is waiting to fill its target.
+function canMove() {
+  const d = S.draft;
+  return !d.spinning && d.selected === null && !(S.settings.draftMode === 'position' && d.spin);
+}
+
+// Slots the player in `fromIdx` can go to: an empty slot they can play, or a filled one
+// whose occupant can play the vacated slot (a swap).
+function moveTargets(fromIdx) {
+  const from = S.draft.slots[fromIdx];
+  return S.draft.slots.filter(s => s.idx !== fromIdx && canPlay(from.pick.p, s.type) &&
+    (!s.pick || canPlay(s.pick.p, from.type))).map(s => s.idx);
+}
+
+function moveTo(fromIdx, toIdx) {
+  const d = S.draft;
+  const from = d.slots[fromIdx], to = d.slots[toIdx];
+  [from.pick, to.pick] = [to.pick, from.pick];
+  d.moving = null;
+  if (d.target !== null && d.slots[d.target].pick) d.target = null;
+  render();
 }
 
 const picks = () => S.draft.slots.filter(s => s.pick).map(s => s.pick);
@@ -98,7 +124,7 @@ function startSpin(isReroll = false) {
   if (d.spin && pool.length > 1) pool = pool.filter(ts => !(ts.team === d.spin.team && ts.year === d.spin.year));
   if (!pool.length) { toast('No squad has an eligible player — try another position'); return; }
   const landing = pool[Math.floor(Math.random() * pool.length)];
-  d.spin = null; d.selected = null; d.spinning = true;
+  d.spin = null; d.selected = null; d.moving = null; d.spinning = true;
   render();
   animateReel(landing, () => {
     d.spinning = false;
@@ -155,9 +181,9 @@ function userTeam() {
   };
 }
 
-function runSeason(sameOpponents = false) {
+function runSeason() {
   const user = userTeam();
-  if (!sameOpponents || !S.opponents) S.opponents = buildOpponents(era(), S.settings.ratingMode);
+  S.opponents = buildOpponents(era(), S.settings.ratingMode);
   S.result = simulateSeason(user, S.opponents);
   S.result.user = user;
   const r = S.result;
@@ -315,6 +341,8 @@ function renderTeamSheet() {
   const posMode = S.settings.draftMode === 'position';
   const sel = d.selected !== null ? PLAYERS[d.selected] : null;
   const selSlots = sel && d.spin ? slotsFor(sel).map(s => s.idx) : [];
+  const moveSlots = d.moving !== null ? moveTargets(d.moving) : [];
+  const movable = canMove();
   const ps = picks();
   const avg = ps.length ? ps.reduce((a, pk) => a + pk.ovr, 0) / ps.length : 0;
   const bowlOpts = ps.filter(pk => pk.r.bowl >= 60).length;
@@ -324,9 +352,15 @@ function renderTeamSheet() {
     const isImp = s.type === 'IMP';
     const num = isImp ? 'IMP' : ++batNo;
     const kind = kindOf(s.type);
-    const clickable = (!s.pick && posMode && !d.spin && !d.spinning) || selSlots.includes(s.idx);
+    const isMoveTarget = moveSlots.includes(s.idx);
+    const clickable = d.moving !== null
+      ? isMoveTarget || s.idx === d.moving
+      : (!s.pick && posMode && !d.spin && !d.spinning) || selSlots.includes(s.idx) || (s.pick && movable);
     const cls = ['sheet-row', `k-${kind}`, s.pick ? 'filled' : 'empty',
-      d.target === s.idx ? 'targeted' : '', selSlots.includes(s.idx) ? 'placeable' : '', clickable ? 'clickable' : ''].join(' ');
+      d.target === s.idx && d.moving === null ? 'targeted' : '',
+      selSlots.includes(s.idx) || isMoveTarget ? 'placeable' : '',
+      d.moving === s.idx ? 'moving' : '',
+      clickable ? 'clickable' : ''].join(' ');
     const body = s.pick
       ? `<div class="sr-main"><b>${esc(s.pick.p.name)}</b>
            <small><span style="color:${teamColor(s.pick.team)}">${seasonTag(s.pick.team, s.pick.year)}</span>${s.pick.p.overseas ? '<span class="os" title="Overseas">✈ Overseas</span>' : ''}</small></div>
@@ -349,6 +383,10 @@ function renderTeamSheet() {
         ${S.settings.overseasCap ? `<span title="Overseas players">✈ ${overseasCount()}/${MAX_OVERSEAS}</span>` : ''}
       </div>
     </div>
+    ${d.moving !== null
+      ? `<div class="move-hint">Moving <b>${esc(d.slots[d.moving].pick.p.name)}</b>. ${moveSlots.length
+          ? 'Tap a highlighted spot to move or swap.' : 'No other spot they can play.'} Tap them again to cancel.</div>`
+      : ps.length && movable ? '<div class="move-hint subtle">Tap a drafted player to move them to another spot they can play.</div>' : ''}
     <div class="sheet-rows">${rows}</div>
     <div class="sheet-foot">
       <div><span>Avg rating</span><b>${ps.length && ratingsVisible() ? avg.toFixed(1) : '—'}</b></div>
@@ -536,7 +574,6 @@ function renderSeason() {
       <div class="dots">${league.map(m => `<span class="${m.won ? 'w' : 'l'}" title="vs ${esc(m.opp.name)}"></span>`).join('')}</div>
       <div class="hero-actions">
         <button class="btn" data-action="share">Share result</button>
-        <button class="btn btn-outline" data-action="resim">Simulate again</button>
         <button class="btn btn-ghost" data-action="setup">New draft</button>
       </div>
     </div>
@@ -641,13 +678,20 @@ function handle(el) {
   if (el.dataset.place !== undefined) { place(PLAYERS[d.selected], Number(el.dataset.place)); return; }
   if (el.dataset.slot !== undefined) {
     const idx = Number(el.dataset.slot);
+    if (d.moving !== null) {
+      if (idx === d.moving) { d.moving = null; render(); }
+      else if (moveTargets(d.moving).includes(idx)) moveTo(d.moving, idx);
+      return;
+    }
     if (d.spin && d.selected !== null) { place(PLAYERS[d.selected], idx); return; }
+    if (d.slots[idx].pick) { if (canMove()) { d.moving = idx; render(); } return; }
     if (S.settings.draftMode === 'position' && !d.spin) { d.target = d.target === idx ? null : idx; render(); }
     return;
   }
   if (el.dataset.player !== undefined) {
     const p = PLAYERS[Number(el.dataset.player)];
     if (blockReason(p)) return;
+    d.moving = null;
     if (S.settings.draftMode === 'position') { place(p, slotsFor(p)[0].idx); return; }
     d.selected = d.selected === p.id ? null : p.id;
     render();
@@ -664,8 +708,7 @@ function handle(el) {
     case 'spin': startSpin(false); break;
     case 'reroll': startSpin(true); break;
     case 'restart': if (confirm('Restart this run? Your picks will be lost.')) { newDraft(); render(); } break;
-    case 'simulate': runSeason(false); break;
-    case 'resim': runSeason(true); break;
+    case 'simulate': runSeason(); break;
     case 'share': share(); break;
   }
 }
