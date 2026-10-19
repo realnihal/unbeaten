@@ -5,8 +5,7 @@ compatibility_date = "2025-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "unbeaten"
-# Replace with the id printed by `npx wrangler d1 create unbeaten` before deploying.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "c790a22e-9e61-44a9-997a-a975d6262e3d"
 migrations_dir = "migrations"
 
 [vars]

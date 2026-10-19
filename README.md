@@ -36,18 +36,15 @@ npx wrangler dev --port 8787
 
 The game uses `http://localhost:8787` automatically when served from localhost.
 
-Deploying (once):
+The API is deployed at https://unbeaten-api.unbeaten-api.workers.dev (D1 database `unbeaten`, APAC). To redeploy after changing `worker/` or the shared `js/engine.js` / `js/draft.js` / `js/data.js`:
 
 ```bash
 cd worker
-npx wrangler login
-npx wrangler d1 create unbeaten        # put the printed database_id in wrangler.toml
-npx wrangler d1 migrations apply unbeaten --remote
-npx wrangler secret put IP_SALT        # any long random string
-npx wrangler deploy
+npm install
+npm run deploy
 ```
 
-Then set `PRODUCTION_API` in `js/config.js` to the Worker URL and push.
+Schema changes go in a new file under `worker/migrations/`, applied with `npm run migrate:remote`. Push the site after the Worker is live, so the two versions match.
 
 **Changing ratings or rules:** player data changes bump `ENGINE_VERSION` automatically. For logic changes, bump `ENGINE_LOGIC_VERSION` in `js/engine.js` and redeploy the Worker, or replays will disagree.
 
