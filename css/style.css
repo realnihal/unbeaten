@@ -440,7 +440,6 @@ h3.label { margin: 28px 0 10px; }
 .lb-rec { font-weight: 900; font-size: 17px; font-variant-numeric: tabular-nums; }
 .lb-finish { font-size: 13px; }
 .lb-nrr, .lb-when { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.lb-gap { text-align: center; color: var(--muted); padding: 4px; letter-spacing: 0.3em; }
 .lb-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .my-main { display: grid; grid-template-columns: 64px 180px minmax(0, 1fr) 70px; gap: 8px; align-items: center; }
 .my-tags { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -451,6 +450,20 @@ h3.label { margin: 28px 0 10px; }
 .xi-chip { font-size: 12px; padding: 5px 8px; border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--kc) 35%, transparent); }
 .xi-chip b { color: var(--kc); font-size: 10px; margin-right: 2px; }
 .xi-chip small { font-weight: 700; font-size: 11px; }
+
+.board-title { margin: 6px 8px 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.you-card {
+  display: flex; align-items: center; gap: 18px; padding: 14px 18px; border-radius: 16px; cursor: pointer;
+  background: linear-gradient(90deg, rgba(255, 138, 31, 0.14), rgba(255, 138, 31, 0.04)); border: 1px solid rgba(255, 138, 31, 0.45);
+}
+.you-card.empty-you { cursor: default; justify-content: space-between; background: var(--surface); border-style: dashed; border-color: var(--border-2); }
+.you-card.empty-you p { margin: 4px 0 0; color: var(--muted); }
+.you-rank { display: flex; flex-direction: column; align-items: center; min-width: 76px; padding-right: 18px; border-right: 1px solid rgba(255, 138, 31, 0.3); }
+.you-rank b { font-size: 34px; font-weight: 900; letter-spacing: -0.03em; color: var(--accent-2); line-height: 1.1; font-variant-numeric: tabular-nums; }
+.you-rank small { font-size: 12px; }
+.you-run { display: grid; gap: 3px; min-width: 0; }
+.you-run small { font-size: 12px; }
+.you-detail { padding: 14px; }
 
 /* ---------- Modal ---------- */
 .modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(4, 6, 10, 0.7); backdrop-filter: blur(4px); display: grid; place-items: center; padding: 16px; }

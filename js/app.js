@@ -304,7 +304,7 @@ async function loadLeaderboard() {
   const lb = S.lb;
   lb.status = 'loading';
   render();
-  const q = new URLSearchParams({ period: lb.period, difficulty: lb.difficulty, era: lb.era, playerId: playerId() });
+  const q = new URLSearchParams({ period: lb.period, difficulty: lb.difficulty, era: lb.era, limit: BOARD_SIZE, playerId: playerId() });
   try {
     lb.data = await api(`/leaderboard?${q}`);
     lb.status = 'ok';
@@ -1019,6 +1019,41 @@ function renderLive() {
 // ---------- Leaderboard screens ----------
 
 const STAGE_ICON = ['', '', '', '🥈', '🏆'];
+const BOARD_SIZE = 25;
+const PERIOD_LABEL = { day: 'today', week: 'this week', all: 'all-time' };
+
+// Your best run for the current filters, with its rank, even when it's outside the top 25.
+function yourRankCard(data) {
+  const lb = S.lb;
+  const scope = `${PERIOD_LABEL[lb.period]} · ${DIFFICULTY[lb.difficulty].name}${lb.era !== 'any' ? ` · ${ERAS.find(e => e.id === lb.era)?.name}` : ''}`;
+  const you = data.you;
+  if (!you) {
+    return `
+    <div class="you-card empty-you">
+      <div><div class="label">Your rank · ${esc(scope)}</div><p>No ranked run here yet.</p></div>
+      <button class="btn btn-small" data-action="setup">Play a ranked run →</button>
+    </div>`;
+  }
+  const pct = data.total ? Math.max(1, Math.ceil((you.rank / data.total) * 100)) : 100;
+  return `
+  <div class="you-card ${you.rank <= BOARD_SIZE ? 'in-top' : ''}" data-run="${you.runId}" role="button" tabindex="0">
+    <div class="you-rank"><span class="label">Your rank</span><b>#${you.rank}</b><small>of ${data.total}</small></div>
+    <div class="you-run">
+      <div class="label">${esc(scope)}</div>
+      <div><b class="lb-rec">${you.wins}-${you.losses}</b> <span class="lb-finish">${STAGE_ICON[you.stage] || ''} ${esc(you.finish)}</span></div>
+      <small>${you.rank <= BOARD_SIZE ? 'In the top 25 below' : `Top ${pct}% · ${you.rank - BOARD_SIZE} place${you.rank - BOARD_SIZE === 1 ? '' : 's'} outside the top 25`} · NRR ${signed(you.nrr)}</small>
+    </div>
+  </div>
+  ${lb.open === you.runId && you.rank > BOARD_SIZE ? `<div class="card you-detail">${runDetail(you.runId)}</div>` : ''}`;
+}
+
+function runDetail(runId) {
+  const detail = S.lb.details[runId];
+  if (!detail) return '<p class="muted">Loading XI…</p>';
+  if (detail.error) return `<p class="form-error">${esc(detail.error)}</p>`;
+  return `${xiChips(detail.xi)}
+    <p class="hint">Team rating ${detail.teamRating} · Finished ${ordinal(detail.position)} in the league · ${esc(COMBOS.find(c => c.id === detail.settings.combo)?.name || '')}</p>`;
+}
 
 function ago(ts) {
   const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
@@ -1055,7 +1090,6 @@ function tagsFor(r) {
 }
 
 function boardRow(r, open, isYou) {
-  const detail = open ? S.lb.details[r.runId] : null;
   return `
   <div class="lb-row ${isYou ? 'you' : ''} ${open ? 'open' : ''}" data-run="${r.runId}" role="button" tabindex="0">
     <div class="lb-main">
@@ -1066,10 +1100,7 @@ function boardRow(r, open, isYou) {
       <span class="lb-nrr">${signed(r.nrr)}</span>
       <span class="lb-when">${ago(r.completedAt)}</span>
     </div>
-    ${open ? `<div class="lb-detail">${!detail ? '<p class="muted">Loading XI…</p>' : detail.error ? `<p class="form-error">${esc(detail.error)}</p>` : `
-      ${xiChips(detail.xi)}
-      <p class="hint">Team rating ${detail.teamRating} · Finished ${ordinal(detail.position)} in the league · ${esc(COMBOS.find(c => c.id === detail.settings.combo)?.name || '')}</p>`}
-    </div>` : ''}
+    ${open ? `<div class="lb-detail">${runDetail(r.runId)}</div>` : ''}
   </div>`;
 }
 
@@ -1085,7 +1116,6 @@ function renderLeaderboard() {
   const data = lb.data;
   const rows = data?.rows ?? [];
   const you = data?.you;
-  const youInTop = you && rows.some(r => r.runId === you.runId);
   let body;
   if (lb.status === 'loading' && !data) body = '<p class="muted center pad">Loading…</p>';
   else if (lb.status === 'error') body = `<p class="form-error center pad">${esc(lb.error)}</p>`;
@@ -1093,7 +1123,7 @@ function renderLeaderboard() {
   else body = `
     <div class="lb-head"><span>#</span><span>Player</span><span>Record</span><span>Finish</span><span>NRR</span><span>When</span></div>
     ${rows.map(r => boardRow(r, lb.open === r.runId, you && r.runId === you.runId)).join('')}
-    ${you && !youInTop ? `<div class="lb-gap">· · ·</div>${boardRow(you, lb.open === you.runId, true)}` : ''}`;
+    ${data.total > rows.length ? `<p class="hint center">Showing the top ${rows.length} of ${data.total} ranked runs.</p>` : ''}`;
 
   return `
   <section class="board">
@@ -1110,7 +1140,8 @@ function renderLeaderboard() {
       <button class="link" data-action="myruns">My runs →</button>
       ${data ? `<span class="muted">${data.total} ranked run${data.total === 1 ? '' : 's'}${lb.status === 'loading' ? ' · refreshing…' : ''}</span>` : ''}
     </div>
-    <div class="card board-card">${body}</div>
+    ${data && lb.status !== 'error' ? yourRankCard(data) : ''}
+    <div class="card board-card"><h3 class="board-title">Top ${BOARD_SIZE}</h3>${body}</div>
     <p class="hint center">"Today" and "This week" reset at midnight IST (weeks start Monday). Runs with the overseas limit off aren't ranked.</p>
   </section>`;
 }

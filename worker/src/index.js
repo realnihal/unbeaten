@@ -4,6 +4,10 @@ import { ENGINE_VERSION, randomSeed } from '../../js/engine.js';
 import { gameSettings, replayDraft, runSeason, summarize, xiSummary, DraftError } from '../../js/draft.js';
 
 const RUNS_PER_HOUR = 30;
+const BOARD_SIZE = 25;
+// Only what a leaderboard row needs; skips the large actions/xi/settings JSON.
+const ROW_COLUMNS = `runs.id, players.nickname, runs.wins, runs.losses, runs.finish, runs.stage, runs.position,
+  runs.nrr, runs.team_rating, runs.difficulty, runs.era, runs.rating_mode, runs.completed_at`;
 const SUBMIT_WINDOW_MS = 2 * 60 * 60 * 1000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -181,7 +185,7 @@ async function submitRun(req, env, runId) {
 
 async function getRun(env, runId) {
   const r = await env.DB.prepare(`
-    SELECT runs.*, players.nickname FROM runs JOIN players ON players.id = runs.player_id
+    SELECT ${ROW_COLUMNS}, runs.settings, runs.xi FROM runs JOIN players ON players.id = runs.player_id
     WHERE runs.id = ?1 AND runs.status = 'complete'
   `).bind(runId).first();
   if (!r) throw new HttpError(404, 'Run not found');
@@ -192,11 +196,11 @@ async function leaderboard(env, params) {
   const period = ['day', 'week', 'all'].includes(params.get('period')) ? params.get('period') : 'day';
   const difficulty = ['easy', 'normal', 'hard'].includes(params.get('difficulty')) ? params.get('difficulty') : 'normal';
   const era = params.get('era') && params.get('era') !== 'any' ? params.get('era') : null;
-  const limit = Math.min(100, Math.max(1, Number(params.get('limit')) || 50));
+  const limit = Math.min(BOARD_SIZE, Math.max(1, Number(params.get('limit')) || BOARD_SIZE));
   const since = periodStart(period);
 
   const { results } = await env.DB.prepare(`
-    SELECT runs.*, players.nickname FROM runs JOIN players ON players.id = runs.player_id
+    SELECT ${ROW_COLUMNS} FROM runs JOIN players ON players.id = runs.player_id
     WHERE status = 'complete' AND ranked = 1 AND difficulty = ?1 AND completed_at >= ?2 AND (?3 IS NULL OR era = ?3)
     ORDER BY ${RANK_ORDER} LIMIT ?4
   `).bind(difficulty, since, era, limit).all();
@@ -206,7 +210,7 @@ async function leaderboard(env, params) {
   const playerId = params.get('playerId');
   if (playerId && UUID.test(playerId)) {
     const best = await env.DB.prepare(`
-      SELECT runs.*, players.nickname FROM runs JOIN players ON players.id = runs.player_id
+      SELECT ${ROW_COLUMNS} FROM runs JOIN players ON players.id = runs.player_id
       WHERE player_id = ?1 AND status = 'complete' AND ranked = 1 AND difficulty = ?2 AND completed_at >= ?3 AND (?4 IS NULL OR era = ?4)
       ORDER BY ${RANK_ORDER} LIMIT 1
     `).bind(playerId.toLowerCase(), difficulty, since, era).first();
@@ -222,9 +226,9 @@ async function playerRuns(env, rawId) {
   const playerId = playerIdFrom(rawId);
   const player = await env.DB.prepare('SELECT nickname FROM players WHERE id = ?1').bind(playerId).first();
   const { results } = await env.DB.prepare(`
-    SELECT runs.*, players.nickname FROM runs JOIN players ON players.id = runs.player_id
-    WHERE player_id = ?1 AND status = 'complete' ORDER BY completed_at DESC LIMIT 50
-  `).bind(playerId).all();
+    SELECT ${ROW_COLUMNS}, runs.ranked, runs.xi FROM runs JOIN players ON players.id = runs.player_id
+    WHERE player_id = ?1 AND status = 'complete' ORDER BY completed_at DESC LIMIT ?2
+  `).bind(playerId, BOARD_SIZE).all();
   return {
     nickname: player?.nickname ?? null,
     runs: results.map(r => ({ ...publicRow(r), ranked: !!r.ranked, xi: JSON.parse(r.xi) })),
