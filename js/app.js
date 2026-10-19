@@ -1,7 +1,7 @@
 import {
   SLOTS, COMBOS, ERAS, MAX_OVERSEAS, LEAGUE_GAMES, PLAYERS, STATS,
   squad, teamSeasons, teamName, teamShort, teamColor, seasonTag,
-  ratingsFor, overall, teamStrength, buildOpponents, simulateSeason, overs, ordinal, shuffle,
+  ratingsFor, overall, teamStrength, buildOpponents, simulateSeason, standings, overs, ordinal, shuffle,
 } from './engine.js';
 import { FIRST_SEASON, LAST_SEASON } from './data.js';
 
@@ -24,7 +24,7 @@ const S = {
   screen: 'home',
   settings: {
     combo: 'balanced', difficulty: 'normal', showRatings: true, draftMode: 'squad',
-    ratingMode: 'season', era: 'all', impact: true, overseasCap: true,
+    ratingMode: 'season', era: 'all', impact: true, overseasCap: true, playSpeed: 1,
     ...store.get('settings', {}),
   },
   draft: null,
@@ -39,6 +39,7 @@ const era = () => ERAS.find(e => e.id === S.settings.era) ?? ERAS[0];
 const combo = () => COMBOS.find(c => c.id === S.settings.combo) ?? COMBOS[0];
 
 function go(screen) {
+  if (screen !== 'live') stopPlayback();
   S.screen = screen;
   render();
   window.scrollTo({ top: 0 });
@@ -192,7 +193,7 @@ function runSeason() {
   if (!best || score > best.score) store.set('best', { score, wins: r.wins, losses: r.losses, finish: r.finish });
   store.set('seasons', store.get('seasons', 0) + 1);
   if (r.perfectLeague) store.set('perfect', store.get('perfect', 0) + 1);
-  go('season');
+  startPlayback();
 }
 
 // ---------- Small render helpers ----------
@@ -624,6 +625,227 @@ function renderSeason() {
   </section>`;
 }
 
+// ---------- Live season playback ----------
+// The season is already decided; playback just reveals it as a list of timed frames.
+
+let L = null;
+const SPEEDS = [1, 2, 4];
+const shortName = t => (t.id === 'YOU' ? 'Your XI' : t.short);
+
+function buildFrames(r) {
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const ticks = reduce ? 0 : 6;
+  const frames = [];
+  const playOut = (base, m, tickMs, resultMs, done) => {
+    for (const step of ['inn1', 'inn2']) {
+      for (let k = 1; k <= ticks; k++) frames.push({ ...base, m, step, part: k / ticks, dur: tickMs });
+    }
+    frames.push({ ...base, ...done, m, step: 'result', dur: resultMs });
+  };
+
+  r.log.filter(m => m.stage === 'League').forEach((m, i) => {
+    playOut({ phase: 'league', round: i, revealed: i }, m, 130, 1100, { revealed: i + 1 });
+  });
+  const qualified = r.position <= 4;
+  frames.push({ phase: 'leagueEnd', revealed: LEAGUE_GAMES, dur: 2200 });
+  r.playoffs.forEach((g, gi) => {
+    const base = { phase: 'playoffs', revealed: LEAGUE_GAMES, po: gi, poDone: gi };
+    frames.push({ ...base, poStep: 'intro', dur: qualified ? 1400 : 600 });
+    if (g.involved) playOut(base, r.log.find(m => m.stage === g.label), 170, 1800, { poDone: gi + 1 });
+    else frames.push({ ...base, poStep: 'result', poDone: gi + 1, dur: qualified ? 1500 : 800 });
+  });
+  frames.push({ phase: 'champion', revealed: LEAGUE_GAMES, poDone: r.playoffs.length, dur: 3000 });
+  return frames;
+}
+
+const speed = () => (SPEEDS.includes(S.settings.playSpeed) ? S.settings.playSpeed : 1);
+
+function startPlayback() {
+  stopPlayback();
+  L = { frames: buildFrames(S.result), i: 0, timer: null, paused: false };
+  go('live');
+  schedule();
+}
+
+function stopPlayback() {
+  if (L) clearTimeout(L.timer);
+  L = null;
+}
+
+function schedule() {
+  clearTimeout(L.timer);
+  if (L.paused) return;
+  L.timer = setTimeout(() => {
+    if (L.i >= L.frames.length - 1) { finishPlayback(); return; }
+    L.i++;
+    render();
+    schedule();
+  }, L.frames[L.i].dur / speed());
+}
+
+function jumpTo(i) {
+  L.i = Math.max(0, Math.min(i, L.frames.length - 1));
+  render();
+  schedule();
+}
+
+function finishPlayback() { go('season'); }
+function togglePause() { L.paused = !L.paused; render(); schedule(); }
+function setSpeed() {
+  S.settings.playSpeed = SPEEDS[(SPEEDS.indexOf(speed()) + 1) % SPEEDS.length];
+  store.set('settings', S.settings);
+  render();
+  schedule();
+}
+function skipToPlayoffs() { jumpTo(L.frames.findIndex(f => f.phase !== 'league')); }
+function nextResult() {
+  const j = L.frames.findIndex((f, k) => k > L.i && (f.step === 'result' || f.poStep || f.phase === 'leagueEnd' || f.phase === 'champion'));
+  if (j === -1) finishPlayback(); else jumpTo(j);
+}
+
+function partial(inn, part) {
+  if (part >= 1) return inn;
+  return { runs: Math.round(inn.runs * part), wkts: Math.floor(inn.wkts * part), balls: Math.round(inn.balls * part) };
+}
+
+function liveMatchCard(f) {
+  const m = f.m;
+  const [inn1, inn2] = m.battedFirst ? [m.userInn, m.oppInn] : [m.oppInn, m.userInn];
+  const [name1, name2] = m.battedFirst ? ['Your XI', m.opp.short] : [m.opp.short, 'Your XI'];
+  const p1 = f.step === 'inn1' ? partial(inn1, f.part) : inn1;
+  const p2 = f.step === 'inn2' ? partial(inn2, f.part) : f.step === 'result' ? inn2 : null;
+  const line = (name, inn, batting) => `
+    <div class="lm-team ${batting ? 'batting' : ''}">
+      <span>${esc(name)}${batting ? ' <i class="bat-dot"></i>' : ''}</span>
+      <b>${inn ? `${inn.runs}/${inn.wkts} <small>(${overs(inn.balls)})</small>` : '<small>Yet to bat</small>'}</b>
+    </div>`;
+  let status;
+  if (f.step === 'inn1') status = `${esc(name1)} batting`;
+  else if (f.step === 'inn2') {
+    const need = inn1.runs + 1 - p2.runs, left = 120 - p2.balls;
+    status = need > 0 ? `${esc(name2)} need ${need} from ${left} ball${left === 1 ? '' : 's'}` : `${esc(name2)} batting`;
+  } else status = `<span class="${m.won ? 'win' : 'loss'}">${m.won ? 'Won' : 'Lost'} by ${esc(m.margin)}</span>`;
+  const label = m.stage === 'League' ? `Match ${m.round + 1} of ${LEAGUE_GAMES}` : m.stage;
+  return `
+  <div class="live-card ${f.step === 'result' ? (m.won ? 'w' : 'l') : 'playing'}">
+    <div class="lc-head"><span class="label">${esc(label)}</span>${f.step === 'result' ? '' : '<span class="live-pill">● LIVE</span>'}</div>
+    <div class="lc-vs">vs <b style="color:${m.opp.color}">${esc(m.opp.name)}</b></div>
+    ${line(name1, p1, f.step === 'inn1')}
+    ${line(name2, p2, f.step === 'inn2')}
+    <div class="lc-status">${status}</div>
+    ${f.step === 'result' ? `<div class="m-stars">⭐ ${esc(m.topBat.name)} ${m.topBat.runs} (${m.topBat.balls}) · 🎯 ${esc(m.topBowl.name)} ${m.topBowl.wkts}/${m.topBowl.runs}</div>` : ''}
+  </div>`;
+}
+
+function liveInfoCard(f, r) {
+  if (f.phase === 'leagueEnd') {
+    const row = r.rows.find(x => x.id === 'YOU');
+    return `
+    <div class="live-card ${r.position <= 4 ? 'w' : 'l'}">
+      <div class="lc-head"><span class="label">League stage complete</span></div>
+      <div class="lc-big">${ordinal(r.position)}</div>
+      <div class="lc-status">${row.pts} points · NRR ${row.nrr >= 0 ? '+' : ''}${row.nrr.toFixed(3)}</div>
+      <p class="muted">${r.position <= 4 ? 'Into the playoffs.' : 'Missed the playoffs. Here is how the rest played out.'}</p>
+    </div>`;
+  }
+  if (f.phase === 'champion') {
+    const champ = r.champion_team;
+    return `
+    <div class="live-card ${r.champion ? 'w gold' : ''}">
+      <div class="lc-head"><span class="label">Season complete</span></div>
+      <div class="lc-big">🏆</div>
+      <div class="lc-status">${esc(champ.id === 'YOU' ? 'Your XI are the champions!' : `${champ.name} are the champions`)}</div>
+    </div>`;
+  }
+  const g = r.playoffs[f.po];
+  const done = f.poStep === 'result';
+  return `
+  <div class="live-card ${done ? '' : 'playing'}">
+    <div class="lc-head"><span class="label">${esc(g.label)}</span>${done ? '' : '<span class="live-pill">UP NEXT</span>'}</div>
+    <div class="lc-vs"><b style="color:${g.a.color}">${esc(shortName(g.a))}</b> vs <b style="color:${g.b.color}">${esc(shortName(g.b))}</b></div>
+    <div class="lc-status">${done ? `${esc(shortName(g.win))} won by ${esc(g.res.margin)}` : 'Toss coming up…'}</div>
+  </div>`;
+}
+
+function renderLive() {
+  const r = S.result;
+  const f = L.frames[L.i];
+  const revealed = f.revealed;
+  const league = r.log.filter(m => m.stage === 'League');
+  const shown = league.slice(0, revealed);
+  const w = shown.filter(m => m.won).length;
+  const rows = standings(r.teams, r.matches.filter(m => m.round < revealed));
+  const pos = rows.findIndex(x => x.id === 'YOU') + 1;
+  const inLeague = f.phase === 'league';
+
+  const title = inLeague ? `Round ${f.round + 1} of ${LEAGUE_GAMES}`
+    : f.phase === 'leagueEnd' ? 'League stage complete'
+    : f.phase === 'playoffs' ? 'Playoffs' : 'Season complete';
+
+  const table = rows.map((row, i) => `
+    <tr class="${row.id === 'YOU' ? 'you' : ''} ${i === 3 ? 'cut' : ''}">
+      <td>${i + 1}</td>
+      <td class="t-name"><span class="dot" style="background:${row.team.color}"></span>${esc(shortName(row.team))}</td>
+      <td>${row.p}</td><td>${row.w}</td><td>${row.l}</td>
+      <td>${row.p ? `${row.nrr >= 0 ? '+' : ''}${row.nrr.toFixed(2)}` : '—'}</td>
+      <td><b>${row.pts}</b></td>
+    </tr>`).join('');
+
+  const lastRound = revealed - 1;
+  const byId = Object.fromEntries(r.teams.map(t => [t.id, t]));
+  const elsewhere = inLeague && lastRound >= 0 ? `
+    <div class="card elsewhere">
+      <h3>Elsewhere in round ${lastRound + 1}</h3>
+      ${r.matches.filter(m => m.round === lastRound && m.home !== 'YOU' && m.away !== 'YOU').map(m => {
+        const win = byId[m.res.winner], lose = byId[m.res.winner === m.home ? m.away : m.home];
+        return `<div class="ew-row"><span><b style="color:${win.color}">${esc(win.short)}</b> beat ${esc(lose.short)}</span><small>${esc(m.res.margin)}</small></div>`;
+      }).join('')}
+    </div>` : '';
+
+  const bracket = !inLeague && f.poDone ? `
+    <div class="card">
+      <h3>Playoffs</h3>
+      <div class="bracket">${r.playoffs.slice(0, f.poDone).map(g => `
+        <div class="bracket-game ${g.involved ? 'involved' : ''}">
+          <div class="label">${g.label}</div>
+          <div class="bg-team ${g.win === g.a ? 'win' : ''}">${esc(shortName(g.a))}</div>
+          <div class="bg-team ${g.win === g.b ? 'win' : ''}">${esc(shortName(g.b))}</div>
+          <small>won by ${esc(g.res.margin)}</small>
+        </div>`).join('')}</div>
+    </div>` : '';
+
+  return `
+  <section class="live">
+    <div class="live-top">
+      <div>
+        <div class="label">${esc(title)}</div>
+        <div class="live-record">${w}<span>-</span>${shown.length - w}</div>
+        <div class="dots">${league.map((m, i) => `<span class="${i < revealed ? (m.won ? 'w' : 'l') : 'pending'}"></span>`).join('')}</div>
+      </div>
+      <div class="live-controls">
+        <button class="btn btn-ghost btn-small" data-action="pause">${L.paused ? '▶ Resume' : '❚❚ Pause'}</button>
+        <button class="btn btn-ghost btn-small" data-action="speed" title="Playback speed">${speed()}×</button>
+        ${inLeague ? '<button class="btn btn-outline btn-small" data-action="skip-playoffs">Skip to playoffs ⏭</button>' : ''}
+        <button class="btn btn-small" data-action="skip-end">Skip to end ⏭</button>
+      </div>
+    </div>
+    <div class="live-grid">
+      <div class="live-main">
+        ${f.m ? liveMatchCard(f) : liveInfoCard(f, r)}
+        ${elsewhere}${bracket}
+      </div>
+      <div class="card">
+        <h3>Points table ${revealed ? `<small>· you're ${ordinal(pos)}</small>` : ''}</h3>
+        <table class="table">
+          <thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>NRR</th><th>Pts</th></tr></thead>
+          <tbody>${table}</tbody>
+        </table>
+      </div>
+    </div>
+    <p class="muted tiny center">Space to pause · → next result</p>
+  </section>`;
+}
+
 function shareText() {
   const r = S.result;
   const league = r.log.filter(m => m.stage === 'League');
@@ -658,9 +880,10 @@ async function share() {
 
 function render() {
   if (S.screen === 'draft' && !S.draft) S.screen = 'setup';
-  if (S.screen === 'season' && !S.result) S.screen = 'home';
+  if ((S.screen === 'season' || S.screen === 'live') && !S.result) S.screen = 'home';
+  if (S.screen === 'live' && !L) S.screen = 'season';
   app.innerHTML = {
-    home: renderHome, setup: renderSetup, draft: renderDraft, season: renderSeason,
+    home: renderHome, setup: renderSetup, draft: renderDraft, live: renderLive, season: renderSeason,
   }[S.screen]();
   document.body.dataset.screen = S.screen;
 }
@@ -710,6 +933,10 @@ function handle(el) {
     case 'restart': if (confirm('Restart this run? Your picks will be lost.')) { newDraft(); render(); } break;
     case 'simulate': runSeason(); break;
     case 'share': share(); break;
+    case 'pause': togglePause(); break;
+    case 'speed': setSpeed(); break;
+    case 'skip-playoffs': skipToPlayoffs(); break;
+    case 'skip-end': finishPlayback(); break;
   }
 }
 
@@ -724,6 +951,11 @@ document.addEventListener('click', e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('[role="button"]')) { handle(e.target); return; }
+  if (S.screen === 'live' && L) {
+    if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); nextResult(); }
+    return;
+  }
   if (e.code !== 'Space' || S.screen !== 'draft') return;
   const d = S.draft;
   if (d.spin || d.spinning || !openSlots().length) return;

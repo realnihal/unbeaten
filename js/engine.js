@@ -309,23 +309,47 @@ function bowlingCard(bowlers, wkts, runsConceded) {
 
 // ---------- Season ----------
 
+// Circle-method round robin: 9 rounds where everyone meets once, then 5 of those rounds
+// replayed with home and away swapped. 14 rounds, one game per team per round.
+function leagueRounds(ids) {
+  const ring = shuffle(ids);
+  const n = ring.length;
+  const rounds = [];
+  for (let r = 0; r < n - 1; r++) {
+    const round = [];
+    for (let i = 0; i < n / 2; i++) {
+      const a = ring[i], b = ring[n - 1 - i];
+      round.push(r % 2 ? [b, a] : [a, b]);
+    }
+    rounds.push(round);
+    ring.splice(1, 0, ring.pop());
+  }
+  const repeats = shuffle(rounds).slice(0, LEAGUE_GAMES - (n - 1)).map(rd => rd.map(([h, a]) => [a, h]));
+  return [...shuffle(rounds), ...shuffle(repeats)];
+}
+
+// Points table from a list of league matches ({ res } from playMatch), sorted by points then NRR.
+export function standings(teams, matches) {
+  const table = Object.fromEntries(teams.map(t => [t.id, { id: t.id, team: t, p: 0, w: 0, l: 0, pts: 0, rf: 0, bf: 0, ra: 0, bb: 0 }]));
+  for (const { res } of matches) {
+    for (const inn of res.inn) {
+      const other = res.inn.find(i => i !== inn);
+      const row = table[inn.team];
+      row.rf += inn.runs; row.bf += inn.nrrBalls; row.ra += other.runs; row.bb += other.nrrBalls;
+      row.p++;
+      if (res.winner === inn.team) { row.w++; row.pts += 2; } else row.l++;
+    }
+  }
+  return Object.values(table)
+    .map(r => ({ ...r, nrr: r.bf ? r.rf / (r.bf / 6) - r.ra / (r.bb / 6) : 0 }))
+    .sort((a, b) => b.pts - a.pts || b.nrr - a.nrr);
+}
+
 // user: { id: 'YOU', name, bat, bowl, ovr, order: [{p,r}], bowlers: [{p,r}] }
 export function simulateSeason(user, opponents) {
   const teams = [user, ...opponents];
   const byId = Object.fromEntries(teams.map(t => [t.id, t]));
 
-  // 10 teams on a circle: near neighbours (distance 1–2) meet once, the rest twice → 14 games each.
-  const ring = shuffle(teams.map(t => t.id));
-  const fixtures = [];
-  for (let i = 0; i < ring.length; i++) {
-    for (let j = i + 1; j < ring.length; j++) {
-      const d = Math.min(j - i, ring.length - (j - i));
-      fixtures.push([ring[i], ring[j]]);
-      if (d > 2) fixtures.push([ring[j], ring[i]]);
-    }
-  }
-
-  const table = Object.fromEntries(teams.map(t => [t.id, { id: t.id, p: 0, w: 0, l: 0, pts: 0, rf: 0, bf: 0, ra: 0, bb: 0 }]));
   const stats = new Map();
   const stat = p => {
     if (!stats.has(p.id)) stats.set(p.id, { p, runs: 0, balls: 0, inns: 0, hs: 0, wkts: 0, conceded: 0, best: null });
@@ -333,7 +357,7 @@ export function simulateSeason(user, opponents) {
   };
   const log = [];
 
-  const userMatch = (res, stage) => {
+  const userMatch = (res, stage, round = null) => {
     const userInn = res.inn.find(i => i.team === user.id);
     const oppInn = res.inn.find(i => i.team !== user.id);
     const bat = battingCard(user.order, userInn.runs, userInn.wkts);
@@ -351,31 +375,23 @@ export function simulateSeason(user, opponents) {
     const topBowl = [...bowl].sort((a, b) => b.wkts - a.wkts || a.runs - b.runs)[0];
     const oppId = res.first === user.id ? res.second : res.first;
     log.push({
-      stage, opp: byId[oppId], won: res.winner === user.id, margin: res.margin,
+      stage, round, opp: byId[oppId], won: res.winner === user.id, margin: res.margin,
       battedFirst: res.first === user.id, userInn, oppInn,
       topBat: { name: topBat.m.p.name, runs: topBat.runs, balls: topBat.balls },
       topBowl: { name: topBowl.m.p.name, wkts: topBowl.wkts, runs: topBowl.runs },
     });
   };
 
-  const order = shuffle(fixtures);
-  for (const [h, a] of order) {
-    const res = playMatch(byId[h], byId[a]);
-    for (const inn of res.inn) {
-      const other = res.inn.find(i => i !== inn);
-      const row = table[inn.team];
-      row.rf += inn.runs; row.bf += inn.nrrBalls; row.ra += other.runs; row.bb += other.nrrBalls;
+  const matches = [];
+  leagueRounds(teams.map(t => t.id)).forEach((round, r) => {
+    for (const [home, away] of round) {
+      const res = playMatch(byId[home], byId[away]);
+      matches.push({ round: r, home, away, res });
+      if (home === user.id || away === user.id) userMatch(res, 'League', r);
     }
-    for (const id of [h, a]) {
-      const row = table[id];
-      row.p++;
-      if (res.winner === id) { row.w++; row.pts += 2; } else row.l++;
-    }
-    if (h === user.id || a === user.id) userMatch(res, 'League');
-  }
+  });
 
-  const rows = Object.values(table).map(r => ({ ...r, nrr: r.rf / (r.bf / 6) - r.ra / (r.bb / 6), team: byId[r.id] }));
-  rows.sort((a, b) => b.pts - a.pts || b.nrr - a.nrr);
+  const rows = standings(teams, matches);
   const position = rows.findIndex(r => r.id === user.id) + 1;
 
   // Playoffs
@@ -409,7 +425,7 @@ export function simulateSeason(user, opponents) {
   const mvp = [...all].sort((a, b) => (b.runs + b.wkts * 25) - (a.runs + a.wkts * 25))[0];
 
   return {
-    wins: w, losses: league.length - w, position, rows, log, playoffs, finish,
+    teams, matches, wins: w, losses: league.length - w, position, rows, log, playoffs, finish,
     champion: finish === 'Champions',
     perfectLeague: w === LEAGUE_GAMES,
     perfectSeason: w === LEAGUE_GAMES && log.every(m => m.won),

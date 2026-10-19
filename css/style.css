@@ -363,6 +363,48 @@ h3.label { margin: 28px 0 10px; }
 .opp small { grid-column: 2; font-size: 11px; }
 .opp-r { grid-row: 1 / span 2; grid-column: 3; font-weight: 800; color: var(--accent-2); }
 
+/* ---------- Live season ---------- */
+.live { padding-top: 24px; display: grid; gap: 18px; }
+.live-top {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+  padding: 18px 20px; border-radius: 18px; background: var(--surface); border: 1px solid var(--border);
+}
+.live-record { font-size: 64px; font-weight: 900; letter-spacing: -0.05em; line-height: 1; margin: 6px 0 10px; font-variant-numeric: tabular-nums; }
+.live-record span { color: var(--accent); }
+.live-top .dots { justify-content: flex-start; }
+.dots span.pending { background: var(--bg-2); border: 1px solid var(--border-2); }
+.live-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.live-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 18px; align-items: start; }
+.live-main { display: grid; gap: 14px; min-width: 0; }
+.live-card {
+  padding: 20px; border-radius: 18px; background: var(--surface); border: 1px solid var(--border);
+  border-top: 4px solid var(--border-2); transition: border-color 0.2s;
+}
+.live-card.playing { border-top-color: var(--accent); }
+.live-card.w { border-top-color: var(--win); }
+.live-card.l { border-top-color: var(--loss); }
+.live-card.gold { background: radial-gradient(500px 200px at 50% 0, rgba(255, 181, 71, 0.22), transparent), var(--surface); }
+.lc-head { display: flex; justify-content: space-between; align-items: center; }
+.live-pill { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; color: var(--loss); animation: blink 1.2s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+.lc-vs { font-size: 18px; margin: 8px 0 14px; }
+.lm-team {
+  display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 12px;
+  background: var(--bg-2); margin-top: 6px; font-variant-numeric: tabular-nums;
+}
+.lm-team b { font-size: 22px; }
+.lm-team.batting { outline: 1px solid rgba(255, 138, 31, 0.5); }
+.bat-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 4px; vertical-align: middle; }
+.lc-status { margin-top: 14px; font-weight: 700; font-size: 16px; }
+.lc-status .win { color: var(--win); }
+.lc-status .loss { color: var(--loss); }
+.lc-big { font-size: 56px; font-weight: 900; letter-spacing: -0.04em; margin-top: 8px; }
+.live-card .m-stars { margin-top: 8px; }
+.elsewhere h3, .live .card h3 { margin: 0 0 10px; font-size: 15px; }
+.ew-row { display: flex; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ew-row:last-child { border-bottom: 0; }
+.center { text-align: center; }
+
 /* ---------- Footer & toast ---------- */
 .footer { max-width: 760px; margin: 0 auto; padding: 30px 16px 40px; text-align: center; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
 .toast {
@@ -378,6 +420,7 @@ h3.label { margin: 28px 0 10px; }
   .sheet { position: static; }
   .panel { order: -1; }
   .season-grid { grid-template-columns: 1fr; }
+  .live-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .options.combos { grid-template-columns: repeat(2, 1fr); }
@@ -391,4 +434,7 @@ h3.label { margin: 28px 0 10px; }
   .chips { width: 100%; justify-content: flex-start; padding-left: 58px; }
   .bracket { grid-template-columns: 1fr; }
   .topnav .link { display: none; }
+  .live-record { font-size: 48px; }
+  .live-controls { width: 100%; }
+  .live-controls .btn { flex: 1; }
 }
