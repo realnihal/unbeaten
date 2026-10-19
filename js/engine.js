@@ -40,6 +40,8 @@ export const ERAS = [
 ];
 
 export const MAX_OVERSEAS = 4;
+// Bump the prefix whenever draft or simulation logic changes; the data hash changes on its own.
+export const ENGINE_LOGIC_VERSION = 1;
 export const LEAGUE_GAMES = 14;
 
 // ---------- Players & squads ----------
@@ -93,6 +95,8 @@ export function teamSeasons(era) {
   }
   return out;
 }
+
+export const ENGINE_VERSION = `${ENGINE_LOGIC_VERSION}-${hashString(JSON.stringify(RAW_PLAYERS)).toString(36)}`;
 
 export const STATS = {
   players: PLAYERS.length,
@@ -201,13 +205,54 @@ export function buildOpponents(era, mode, count = 9) {
 
 // ---------- Match simulation ----------
 
-const rand = Math.random;
-function gauss() {
-  let u = 0, v = 0;
-  while (!u) u = rand();
-  while (!v) v = rand();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+// All randomness goes through `rand`, which can be swapped for a seeded generator so the
+// browser and the server produce identical drafts and seasons. Only +, −, ×, ÷ and rounding
+// are used on random values (no Math.log/cos/pow), because those can differ by a bit across
+// JavaScript engines and would break replays.
+let rand = Math.random;
+
+export function withRng(rng, fn) {
+  const prev = rand;
+  rand = rng;
+  try { return fn(); } finally { rand = prev; }
 }
+
+// String → 32-bit hash (cyrb53, folded) → mulberry32 generator.
+export function hashString(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h1 ^ h2) >>> 0;
+}
+
+export function rngFrom(seed) {
+  let a = hashString(String(seed));
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function randomSeed() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Approximately standard normal (Irwin–Hall: sum of 12 uniforms minus 6).
+function gauss() {
+  let s = -6;
+  for (let i = 0; i < 12; i++) s += rand();
+  return s;
+}
+const pow5 = x => x * x * x * x * x;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const randInt = (a, b) => a + Math.floor(rand() * (b - a + 1));
 export function shuffle(arr) {
@@ -277,7 +322,7 @@ const POS_W = [1.3, 1.3, 1.2, 1.1, 1.0, 0.9, 0.8, 0.6, 0.5, 0.4, 0.4];
 
 function battingCard(order, runs, wkts) {
   const batted = order.slice(0, Math.min(order.length, wkts + 2));
-  const weights = batted.map((m, i) => Math.pow((m.r.bat || 30) / 70, 5) * POS_W[i] * (0.25 + rand() * 1.5));
+  const weights = batted.map((m, i) => pow5((m.r.bat || 30) / 70) * POS_W[i] * (0.25 + rand() * 1.5));
   const total = weights.reduce((a, b) => a + b, 0);
   const pool = runs - Math.round(runs * 0.06);
   const card = batted.map((m, i) => ({ m, runs: Math.floor(pool * weights[i] / total) }));
@@ -293,7 +338,7 @@ function battingCard(order, runs, wkts) {
 function bowlingCard(bowlers, wkts, runsConceded) {
   const five = bowlers.slice(0, 5);
   const card = five.map(m => ({ m, wkts: 0, runs: 0 }));
-  const weights = five.map(m => Math.pow(m.r.bowl / 70, 5));
+  const weights = five.map(m => pow5(m.r.bowl / 70));
   for (let k = 0; k < wkts; k++) {
     const jittered = weights.map(w => w * (0.3 + rand() * 1.4));
     const sum = jittered.reduce((a, b) => a + b, 0);
@@ -301,7 +346,7 @@ function bowlingCard(bowlers, wkts, runsConceded) {
     while (x > jittered[i] && i < jittered.length - 1) { x -= jittered[i]; i++; }
     card[i].wkts++;
   }
-  const econW = five.map(m => Math.pow(80 / m.r.bowl, 2) * (0.6 + rand() * 0.8));
+  const econW = five.map(m => (80 / m.r.bowl) * (80 / m.r.bowl) * (0.6 + rand() * 0.8));
   const ew = econW.reduce((a, b) => a + b, 0);
   card.forEach((c, i) => { c.runs = Math.round(runsConceded * 0.95 * econW[i] / ew); });
   return card;

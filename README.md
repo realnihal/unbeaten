@@ -15,7 +15,40 @@ Then open http://localhost:5173.
 ## Files
 
 - `js/data.js` holds franchises, plus each player's roles, peak batting/bowling ratings, peak season and franchise stints. Squads are derived from the stints.
-- `js/engine.js` handles slots, team combinations, ratings by season or prime, team strength, and the match and season simulation.
-- `js/app.js` handles the UI: home, setup, draft and season screens.
+- `js/engine.js` handles ratings, team strength, and the match and season simulation. All randomness goes through a seedable generator.
+- `js/draft.js` holds the draft rules, shared by the browser and the server: spins, picks, moves, the overseas cap and replaying an action log.
+- `js/app.js` handles the UI: home, setup, draft, live season, results, leaderboard and My runs.
+- `js/config.js` sets the leaderboard API URL. When it's `null` the game runs fully offline (unranked).
+- `worker/` is the leaderboard API: a Cloudflare Worker with a D1 database.
+- `tests/` has the replay tests: `npm test`.
+
+## Leaderboard
+
+Runs are server-authoritative. Starting a draft asks the Worker for a seed, and every spin is derived from it. Submitting sends the action log; the Worker replays the draft (rejecting anything illegal), simulates the season with a fresh seed, stores the run and returns ranks. The browser then replays the same seeds locally for the playback, so the result is identical. See `docs/leaderboard-plan.md` for the design.
+
+Local development:
+
+```bash
+cd worker
+npx wrangler d1 migrations apply unbeaten --local
+npx wrangler dev --port 8787
+```
+
+The game uses `http://localhost:8787` automatically when served from localhost.
+
+Deploying (once):
+
+```bash
+cd worker
+npx wrangler login
+npx wrangler d1 create unbeaten        # put the printed database_id in wrangler.toml
+npx wrangler d1 migrations apply unbeaten --remote
+npx wrangler secret put IP_SALT        # any long random string
+npx wrangler deploy
+```
+
+Then set `PRODUCTION_API` in `js/config.js` to the Worker URL and push.
+
+**Changing ratings or rules:** player data changes bump `ENGINE_VERSION` automatically. For logic changes, bump `ENGINE_LOGIC_VERSION` in `js/engine.js` and redeploy the Worker, or replays will disagree.
 
 Ratings and squads are hand-curated fan estimates, so some squads are only partially listed.

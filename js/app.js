@@ -1,15 +1,13 @@
 import {
-  SLOTS, COMBOS, ERAS, MAX_OVERSEAS, LEAGUE_GAMES, PLAYERS, STATS,
-  squad, teamSeasons, teamName, teamShort, teamColor, seasonTag,
-  ratingsFor, overall, teamStrength, buildOpponents, simulateSeason, standings, overs, ordinal, shuffle,
+  SLOTS, COMBOS, ERAS, MAX_OVERSEAS, LEAGUE_GAMES, PLAYERS, STATS, ENGINE_VERSION,
+  squad, teamSeasons, teamName, teamColor, seasonTag,
+  ratingsFor, overall, standings, overs, ordinal, shuffle, randomSeed,
 } from './engine.js';
+import * as D from './draft.js';
 import { FIRST_SEASON, LAST_SEASON } from './data.js';
+import { API_BASE } from './config.js';
 
-const DIFFICULTY = {
-  easy:   { name: 'Easy', rerolls: 3, note: '3 rerolls available' },
-  normal: { name: 'Normal', rerolls: 1, note: '1 reroll available' },
-  hard:   { name: 'Hard', rerolls: 0, note: 'No rerolls · ratings hidden' },
-};
+const DIFFICULTY = D.DIFFICULTY;
 
 const store = {
   get(key, fallback) {
@@ -28,8 +26,16 @@ const S = {
     ...store.get('settings', {}),
   },
   draft: null,
+  run: null,          // { runId, seed, ranked, note } for the current draft
   result: null,
   opponents: null,
+  modal: null,        // 'nickname-sim' | 'nickname-edit'
+  modalError: null,
+  starting: false,
+  submitting: false,
+  lb: { period: 'day', difficulty: 'normal', era: 'any', status: 'idle', data: null, open: null, details: {} },
+  mine: { status: 'idle', data: null, open: null },
+  top3: { status: 'idle', data: null, at: 0 },
 };
 
 const app = document.getElementById('app');
@@ -43,6 +49,9 @@ function go(screen) {
   S.screen = screen;
   render();
   window.scrollTo({ top: 0 });
+  if (screen === 'leaderboard' && API_BASE) loadLeaderboard();
+  if (screen === 'myruns' && API_BASE) loadMyRuns();
+  if (screen === 'home') loadTop3();
 }
 
 function toast(msg) {
@@ -53,91 +62,124 @@ function toast(msg) {
   toast.t = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
-// ---------- Draft logic ----------
+// ---------- Player identity & API ----------
 
-function newDraft() {
-  const slots = combo().slots.map((type, idx) => ({ idx, type, pick: null }));
-  if (S.settings.impact) slots.push({ idx: slots.length, type: 'IMP', pick: null });
-  S.draft = {
-    slots, rerolls: DIFFICULTY[S.settings.difficulty].rerolls, rerollsUsed: 0,
-    spin: null, spinning: false, selected: null, target: null, moving: null, sort: 'rating',
-  };
+class ApiError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
 }
 
-const canPlay = (p, type) => type === 'IMP' || p.slots.includes(type);
+function playerId() {
+  let id = store.get('playerId', null);
+  if (!id) { id = crypto.randomUUID(); store.set('playerId', id); }
+  return id;
+}
+
+async function api(path, { method = 'GET', body, timeout = 8000 } = {}) {
+  if (!API_BASE) throw new ApiError(0, 'Leaderboard is offline.');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const res = await fetch(API_BASE + path, {
+      method, signal: ctrl.signal,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, data.error || `Request failed (${res.status})`);
+    return data;
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    throw new ApiError(0, 'Could not reach the leaderboard.');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const UNRANKED_NOTES = {
+  offline: 'Unranked: the leaderboard could not be reached.',
+  outdated: 'Unranked: the game was updated. Refresh the page to play ranked runs.',
+  ratelimit: 'Unranked: too many runs this hour.',
+  rejected: 'Unranked: this run could not be verified.',
+  nocap: 'Saved, but not ranked: the overseas limit was off.',
+};
+
+// ---------- Draft ----------
+// The rules live in draft.js (shared with the server). Every change to the draft goes
+// through `act`, which also appends to the action log that gets submitted.
+
+async function startRun() {
+  if (S.starting) return;
+  const settings = D.gameSettings(S.settings);
+  let run = { runId: null, seed: randomSeed(), ranked: false, note: API_BASE ? 'offline' : null };
+  if (API_BASE) {
+    S.starting = true;
+    render();
+    try {
+      const res = await api('/runs', { method: 'POST', body: { playerId: playerId(), settings, engineVersion: ENGINE_VERSION } });
+      run = { runId: res.runId, seed: res.seed, ranked: settings.overseasCap, note: settings.overseasCap ? null : 'nocap' };
+    } catch (e) {
+      run.note = e.status === 409 ? 'outdated' : e.status === 429 ? 'ratelimit' : 'offline';
+      toast(`${e.message} This run won't be ranked.`);
+    }
+    S.starting = false;
+  }
+  S.run = run;
+  S.draft = Object.assign(D.createDraft(settings, run.seed), { spinning: false, selected: null, moving: null, sort: 'rating' });
+  go('draft');
+}
+
+function act(action) {
+  try {
+    D.applyAction(S.draft, action);
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
+}
+
+const posMode = () => S.draft.settings.draftMode === 'position';
+const picks = () => D.picks(S.draft);
+const openSlots = () => D.openSlots(S.draft);
+const overseasCount = () => D.overseasCount(S.draft);
+const slotsFor = p => D.slotsFor(S.draft, p);
+const blockReason = p => D.blockReason(S.draft, p);
+const moveTargets = idx => D.moveTargets(S.draft, idx);
+const userTeam = () => D.userTeam(S.draft);
+const squadShown = () => S.draft.spin && !S.draft.spinning;
 
 // Drafted players can be moved at any time except mid-spin, while choosing a squad player,
 // or while a Position First spin is waiting to fill its target.
 function canMove() {
   const d = S.draft;
-  return !d.spinning && d.selected === null && !(S.settings.draftMode === 'position' && d.spin);
-}
-
-// Slots the player in `fromIdx` can go to: an empty slot they can play, or a filled one
-// whose occupant can play the vacated slot (a swap).
-function moveTargets(fromIdx) {
-  const from = S.draft.slots[fromIdx];
-  return S.draft.slots.filter(s => s.idx !== fromIdx && canPlay(from.pick.p, s.type) &&
-    (!s.pick || canPlay(s.pick.p, from.type))).map(s => s.idx);
+  return !d.spinning && d.selected === null && !(posMode() && d.spin);
 }
 
 function moveTo(fromIdx, toIdx) {
-  const d = S.draft;
-  const from = d.slots[fromIdx], to = d.slots[toIdx];
-  [from.pick, to.pick] = [to.pick, from.pick];
-  d.moving = null;
-  if (d.target !== null && d.slots[d.target].pick) d.target = null;
+  if (act({ t: 'move', f: fromIdx, to: toIdx })) S.draft.moving = null;
   render();
-}
-
-const picks = () => S.draft.slots.filter(s => s.pick).map(s => s.pick);
-const openSlots = () => S.draft.slots.filter(s => !s.pick);
-const overseasCount = () => picks().filter(pk => pk.p.overseas).length;
-const drafted = p => picks().some(pk => pk.p.id === p.id);
-
-function slotsFor(p) {
-  const d = S.draft;
-  return openSlots().filter(s =>
-    (s.type === 'IMP' || p.slots.includes(s.type)) &&
-    (S.settings.draftMode !== 'position' || d.target === null || s.idx === d.target));
-}
-
-function blockReason(p) {
-  if (drafted(p)) return 'Already in your XI';
-  if (S.settings.overseasCap && p.overseas && overseasCount() >= MAX_OVERSEAS) return `Overseas limit (${MAX_OVERSEAS}) reached`;
-  if (!slotsFor(p).length) return S.settings.draftMode === 'position' ? `Can't play ${SLOTS[S.draft.slots[S.draft.target].type].label}` : 'No open slot for this role';
-  return null;
-}
-
-function spinnable() {
-  return teamSeasons(era()).filter(ts => squad(ts.team, ts.year).some(p => !blockReason(p)));
 }
 
 function startSpin(isReroll = false) {
   const d = S.draft;
   if (d.spinning || !openSlots().length) return;
-  if (S.settings.draftMode === 'position' && d.target === null) { toast('Pick an open position first'); return; }
-  if (isReroll) {
-    if (d.rerolls <= 0) return;
-    d.rerolls--; d.rerollsUsed++;
-  }
-  let pool = spinnable();
-  if (d.spin && pool.length > 1) pool = pool.filter(ts => !(ts.team === d.spin.team && ts.year === d.spin.year));
-  if (!pool.length) { toast('No squad has an eligible player — try another position'); return; }
-  const landing = pool[Math.floor(Math.random() * pool.length)];
-  d.spin = null; d.selected = null; d.moving = null; d.spinning = true;
+  if (posMode() && d.target === null) { toast('Pick an open position first'); return; }
+  if (isReroll && d.rerolls <= 0) return;
+  d.selected = null;
+  d.moving = null;
+  if (!act({ t: isReroll ? 'reroll' : 'spin' })) return;
+  d.spinning = true;
   render();
-  animateReel(landing, () => {
+  animateReel(() => {
     d.spinning = false;
-    d.spin = landing;
     render();
   });
 }
 
-function animateReel(landing, done) {
+function animateReel(done) {
   const teamEl = document.getElementById('reel-team');
   const yearEl = document.getElementById('reel-year');
-  const all = teamSeasons(era());
+  const all = teamSeasons(D.eraOf(S.draft.settings));
   // Timers rather than requestAnimationFrame so the spin still resolves in a background tab.
   const start = Date.now();
   const duration = 1500;
@@ -153,40 +195,39 @@ function animateReel(landing, done) {
 }
 
 function place(p, slotIdx) {
-  const d = S.draft;
-  const slot = d.slots[slotIdx];
-  if (!slot || slot.pick || blockReason(p)) return;
-  const r = ratingsFor(p, d.spin.year, S.settings.ratingMode);
-  slot.pick = { p, team: d.spin.team, year: d.spin.year, r, ovr: overall(p, r) };
-  d.spin = null; d.selected = null; d.target = null;
+  if (act({ t: 'pick', p: p.id, s: slotIdx })) S.draft.selected = null;
   render();
 }
 
-function userTeam() {
-  const xi = S.draft.slots.filter(s => s.type !== 'IMP').map(s => s.pick);
-  const imp = S.draft.slots.find(s => s.type === 'IMP')?.pick;
-  const order = [...xi];
-  const bowlPool = [...xi];
-  if (imp) {
-    if ((imp.r.bat || 0) >= (imp.r.bowl || 0)) {
-      const firstBowler = S.draft.slots.findIndex(s => SLOTS[s.type].kind === 'bowl');
-      order.splice(firstBowler === -1 ? 7 : firstBowler, 0, imp);
-    } else bowlPool.push(imp);
+async function simulate() {
+  const d = S.draft;
+  const run = S.run;
+  if (S.submitting || !D.isComplete(d)) return;
+  if (run.runId && !store.get('nickname', null) && !store.get('nicknameAsked', false)) {
+    openNicknameModal('nickname-sim');
+    return;
   }
-  const bat = teamStrength(order).bat;
-  const bowlSt = teamStrength(bowlPool);
-  return {
-    id: 'YOU', name: 'Your XI', short: 'YOUR XI', color: '#ff8a1f',
-    bat, bowl: bowlSt.bowl, ovr: (bat + bowlSt.bowl) / 2, bowlingOptions: bowlSt.bowlingOptions,
-    order, bowlers: bowlPool.filter(m => m.r.bowl > 0).sort((a, b) => b.r.bowl - a.r.bowl),
-  };
-}
-
-function runSeason() {
-  const user = userTeam();
-  S.opponents = buildOpponents(era(), S.settings.ratingMode);
-  S.result = simulateSeason(user, S.opponents);
-  S.result.user = user;
+  let seasonSeed = randomSeed();
+  let server = null;
+  if (run.runId) {
+    S.submitting = true;
+    render();
+    try {
+      server = await api(`/runs/${run.runId}/submit`, { method: 'POST', body: { playerId: playerId(), actions: d.actions }, timeout: 15000 });
+      seasonSeed = server.seasonSeed;
+    } catch (e) {
+      run.note = e.status === 422 ? 'rejected' : 'offline';
+      toast(`${e.message} Playing this season unranked.`);
+    }
+    S.submitting = false;
+  }
+  const result = D.runSeason(d, seasonSeed);
+  if (server && JSON.stringify(D.summarize(result)) !== JSON.stringify(server.summary)) {
+    console.warn('Local replay differs from the server result', D.summarize(result), server.summary);
+  }
+  S.result = { ...result, server };
+  S.opponents = result.opponents;
+  S.top3.at = 0;
   const r = S.result;
   const best = store.get('best', null);
   const score = r.wins * 10 + (r.champion ? 5 : 0);
@@ -194,6 +235,126 @@ function runSeason() {
   store.set('seasons', store.get('seasons', 0) + 1);
   if (r.perfectLeague) store.set('perfect', store.get('perfect', 0) + 1);
   startPlayback();
+}
+
+// ---------- Nickname ----------
+
+const NAME_IDEAS = ['Cover Drive', 'Yorker King', 'Helicopter Shot', 'Doosra', 'Super Over', 'Googly', 'Paddle Scoop', 'Death Overs', 'Free Hit', 'Slower Ball'];
+
+function openNicknameModal(mode) {
+  S.modal = mode;
+  S.modalError = null;
+  render();
+  requestAnimationFrame(() => {
+    const input = document.getElementById('nick-input');
+    if (input) { input.focus(); input.select(); }
+  });
+}
+
+async function saveNickname() {
+  const input = document.getElementById('nick-input');
+  const name = (input?.value || '').trim();
+  try {
+    const res = await api(`/players/${playerId()}`, { method: 'PUT', body: { nickname: name } });
+    store.set('nickname', res.nickname);
+    const mode = S.modal;
+    S.modal = null;
+    if (mode === 'nickname-sim') simulate();
+    else { toast(`You're now ${res.nickname}`); refreshBoards(); render(); }
+  } catch (e) {
+    S.modalError = e.message;
+    render();
+    requestAnimationFrame(() => {
+      const el = document.getElementById('nick-input');
+      if (el) { el.value = name; el.focus(); }
+    });
+  }
+}
+
+function skipNickname() {
+  store.set('nicknameAsked', true);
+  const mode = S.modal;
+  S.modal = null;
+  if (mode === 'nickname-sim') simulate(); else render();
+}
+
+function renderModal() {
+  if (!S.modal) return '';
+  const current = store.get('nickname', null);
+  const idea = `${NAME_IDEAS[Math.floor(Math.random() * NAME_IDEAS.length)]} ${10 + Math.floor(Math.random() * 90)}`;
+  const forSim = S.modal === 'nickname-sim';
+  return `
+  <div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nick-title">
+      <h2 id="nick-title">${forSim ? 'Pick a leaderboard name' : 'Change your name'}</h2>
+      <p class="muted">${forSim ? 'Your season is ranked against everyone else. This name appears next to your runs.' : 'This updates the name on all your runs.'}</p>
+      <input id="nick-input" class="input" maxlength="20" autocomplete="off" value="${esc(current || idea)}">
+      ${S.modalError ? `<p class="form-error">${esc(S.modalError)}</p>` : '<p class="hint">3–20 characters: letters, numbers, spaces, _ or -</p>'}
+      <div class="modal-actions">
+        <button class="btn" data-action="save-nickname">Save${forSim ? ' & simulate' : ''}</button>
+        <button class="btn btn-ghost" data-action="skip-nickname">${forSim ? 'Stay anonymous' : 'Cancel'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---------- Leaderboard data ----------
+
+async function loadLeaderboard() {
+  const lb = S.lb;
+  lb.status = 'loading';
+  render();
+  const q = new URLSearchParams({ period: lb.period, difficulty: lb.difficulty, era: lb.era, playerId: playerId() });
+  try {
+    lb.data = await api(`/leaderboard?${q}`);
+    lb.status = 'ok';
+  } catch (e) {
+    lb.status = 'error';
+    lb.error = e.message;
+  }
+  if (S.screen === 'leaderboard') render();
+}
+
+async function toggleRun(runId) {
+  const lb = S.lb;
+  lb.open = lb.open === runId ? null : runId;
+  render();
+  if (lb.open && !lb.details[runId]) {
+    try { lb.details[runId] = await api(`/runs/${runId}`); } catch (e) { lb.details[runId] = { error: e.message }; }
+    if (S.screen === 'leaderboard') render();
+  }
+}
+
+async function loadMyRuns() {
+  S.mine.status = 'loading';
+  render();
+  try {
+    S.mine.data = await api(`/players/${playerId()}/runs`);
+    S.mine.status = 'ok';
+    if (S.mine.data.nickname) store.set('nickname', S.mine.data.nickname);
+  } catch (e) {
+    S.mine.status = 'error';
+    S.mine.error = e.message;
+  }
+  if (S.screen === 'myruns') render();
+}
+
+async function loadTop3() {
+  if (!API_BASE || S.top3.status === 'loading' || Date.now() - S.top3.at < 60000) return;
+  S.top3.status = 'loading';
+  try {
+    S.top3.data = await api('/leaderboard?period=day&difficulty=normal&limit=3');
+    S.top3.status = 'ok';
+  } catch {
+    S.top3.status = 'error';
+  }
+  S.top3.at = Date.now();
+  if (S.screen === 'home') render();
+}
+
+function refreshBoards() {
+  if (S.screen === 'leaderboard') loadLeaderboard();
+  if (S.screen === 'myruns') loadMyRuns();
 }
 
 // ---------- Small render helpers ----------
@@ -241,8 +402,13 @@ function renderHome() {
     <p class="hero-sub">Build an All-Time IPL XI</p>
     <div class="hero-cta">
       <button class="btn btn-big" data-action="setup">Play 14-0 →</button>
-      <button class="btn btn-ghost" data-action="how">How it works</button>
+      <button class="btn btn-ghost" data-action="leaderboard">🏆 Leaderboard</button>
     </div>
+    ${API_BASE && S.top3.data?.rows?.length ? `
+    <div class="top3">
+      <div class="label">Today's top runs · Normal</div>
+      ${S.top3.data.rows.map(r => `<div class="top3-row"><span class="t3-rank">${['🥇', '🥈', '🥉'][r.rank - 1]}</span><b>${esc(r.nickname)}</b><span class="t3-rec">${r.wins}-${r.losses}</span><small>${esc(r.finish)}</small></div>`).join('')}
+    </div>` : ''}
     ${seasons ? `<div class="record-strip">
       <div><b>${seasons}</b><span>Seasons played</span></div>
       <div><b>${best ? `${best.wins}-${best.losses}` : '—'}</b><span>Best record</span></div>
@@ -333,13 +499,14 @@ function renderSetup() {
       { value: false, title: 'No limit', sub: 'Stack the overseas stars' },
     ])}
 
-    <button class="btn btn-big btn-block" data-action="start">Start Draft →</button>
+    <button class="btn btn-big btn-block" data-action="start" ${S.starting ? 'disabled' : ''}>${S.starting ? 'Starting…' : 'Start Draft →'}</button>
+    ${API_BASE ? `<p class="hint center">${S.settings.overseasCap ? 'Ranked run: your season goes on the leaderboard.' : 'Unranked: the leaderboard only counts runs with the overseas limit on.'}</p>` : ''}
   </section>`;
 }
 
 function renderTeamSheet() {
   const d = S.draft;
-  const posMode = S.settings.draftMode === 'position';
+  const posMode = S.draft.settings.draftMode === 'position';
   const sel = d.selected !== null ? PLAYERS[d.selected] : null;
   const selSlots = sel && d.spin ? slotsFor(sel).map(s => s.idx) : [];
   const moveSlots = d.moving !== null ? moveTargets(d.moving) : [];
@@ -403,7 +570,7 @@ function renderTeamSheet() {
 function renderSquad() {
   const d = S.draft;
   const { team, year } = d.spin;
-  const posMode = S.settings.draftMode === 'position';
+  const posMode = S.draft.settings.draftMode === 'position';
   let list = squad(team, year).map(p => {
     const r = ratingsFor(p, year, S.settings.ratingMode);
     return { p, r, ovr: overall(p, r), block: blockReason(p) };
@@ -461,17 +628,18 @@ function renderReady() {
     ${bar('Bowling', u.bowl)}
     ${bar('Team rating', u.ovr)}
     ${warn}
-    <button class="btn btn-big btn-block" data-action="simulate">Simulate season →</button>
+    <button class="btn btn-big btn-block" data-action="simulate" ${S.submitting ? 'disabled' : ''}>${S.submitting ? 'Submitting your XI…' : 'Simulate season →'}</button>
+    ${S.run?.runId ? `<p class="hint center">${S.run.ranked ? '🏅 Ranked run' : esc(UNRANKED_NOTES[S.run.note] || '')}</p>` : S.run?.note ? `<p class="hint center">${esc(UNRANKED_NOTES[S.run.note])}</p>` : ''}
   </div>`;
 }
 
 function renderDraft() {
   const d = S.draft;
   const left = openSlots().length;
-  const posMode = S.settings.draftMode === 'position';
+  const posMode = S.draft.settings.draftMode === 'position';
   let panel;
   if (!left) panel = renderReady();
-  else if (d.spin) panel = renderSquad();
+  else if (squadShown()) panel = renderSquad();
   else {
     const target = posMode && d.target !== null ? d.slots[d.target] : null;
     panel = `
@@ -573,8 +741,10 @@ function renderSeason() {
       <div class="verdict">${v.title}</div>
       <p>${v.text}</p>
       <div class="dots">${league.map(m => `<span class="${m.won ? 'w' : 'l'}" title="vs ${esc(m.opp.name)}"></span>`).join('')}</div>
+      ${rankBanner(r)}
       <div class="hero-actions">
         <button class="btn" data-action="share">Share result</button>
+        ${API_BASE ? '<button class="btn btn-outline" data-action="leaderboard">🏆 Leaderboard</button>' : ''}
         <button class="btn btn-ghost" data-action="setup">New draft</button>
       </div>
     </div>
@@ -846,6 +1016,133 @@ function renderLive() {
   </section>`;
 }
 
+// ---------- Leaderboard screens ----------
+
+const STAGE_ICON = ['', '', '', '🥈', '🏆'];
+
+function ago(ts) {
+  const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+const signed = n => `${n >= 0 ? '+' : ''}${Number(n).toFixed(3)}`;
+
+function rankBanner(r) {
+  if (!API_BASE) return '';
+  const srv = r.server;
+  if (srv?.ranks) {
+    const k = srv.ranks;
+    return `<div class="rank-banner">🏅 <b>#${k.day}</b> today · <b>#${k.week}</b> this week · <b>#${k.all}</b> all-time <span class="muted">· ${esc(DIFFICULTY[srv.difficulty].name)}</span></div>`;
+  }
+  const note = srv && !srv.ranked ? 'nocap' : S.run?.note;
+  return note ? `<div class="rank-banner muted">${esc(UNRANKED_NOTES[note])}</div>` : '';
+}
+
+function xiChips(xi) {
+  return `<div class="xi-chips">${xi.map(x => `
+    <span class="xi-chip k-${kindOf(x.slot)}"><b>${SLOTS[x.slot].short}</b> ${esc(x.name)} <small style="color:${teamColor(x.team)}">${seasonTag(x.team, x.year)}</small></span>`).join('')}</div>`;
+}
+
+function tagsFor(r) {
+  const era = ERAS.find(e => e.id === r.era);
+  return [
+    r.era !== 'all' && era ? era.name : null,
+    r.ratingMode === 'prime' ? 'Prime' : null,
+  ].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+}
+
+function boardRow(r, open, isYou) {
+  const detail = open ? S.lb.details[r.runId] : null;
+  return `
+  <div class="lb-row ${isYou ? 'you' : ''} ${open ? 'open' : ''}" data-run="${r.runId}" role="button" tabindex="0">
+    <div class="lb-main">
+      <span class="lb-rank ${r.rank <= 3 ? 'top' : ''}">${r.rank}</span>
+      <span class="lb-name"><b>${esc(r.nickname)}</b>${isYou ? ' <span class="tag you-tag">You</span>' : ''}${tagsFor(r)}</span>
+      <span class="lb-rec">${r.wins}-${r.losses}</span>
+      <span class="lb-finish">${STAGE_ICON[r.stage] || ''} ${esc(r.finish)}</span>
+      <span class="lb-nrr">${signed(r.nrr)}</span>
+      <span class="lb-when">${ago(r.completedAt)}</span>
+    </div>
+    ${open ? `<div class="lb-detail">${!detail ? '<p class="muted">Loading XI…</p>' : detail.error ? `<p class="form-error">${esc(detail.error)}</p>` : `
+      ${xiChips(detail.xi)}
+      <p class="hint">Team rating ${detail.teamRating} · Finished ${ordinal(detail.position)} in the league · ${esc(COMBOS.find(c => c.id === detail.settings.combo)?.name || '')}</p>`}
+    </div>` : ''}
+  </div>`;
+}
+
+function renderLeaderboard() {
+  const lb = S.lb;
+  const nick = store.get('nickname', null);
+  if (!API_BASE) {
+    return `<section class="board"><h1 class="page-title">Leaderboard</h1>
+      <p class="page-sub">The leaderboard isn't live yet. Your runs still count on this device.</p>
+      <div class="center"><button class="btn" data-action="setup">Play a run →</button></div></section>`;
+  }
+  const chip = (key, value, label) => `<button class="${lb[key] === value ? 'active' : ''}" data-lb="${key}:${value}">${label}</button>`;
+  const data = lb.data;
+  const rows = data?.rows ?? [];
+  const you = data?.you;
+  const youInTop = you && rows.some(r => r.runId === you.runId);
+  let body;
+  if (lb.status === 'loading' && !data) body = '<p class="muted center pad">Loading…</p>';
+  else if (lb.status === 'error') body = `<p class="form-error center pad">${esc(lb.error)}</p>`;
+  else if (!rows.length) body = `<div class="empty"><p>No ranked runs ${lb.period === 'day' ? 'today' : lb.period === 'week' ? 'this week' : 'yet'} on ${DIFFICULTY[lb.difficulty].name}.</p><button class="btn" data-action="setup">Be the first →</button></div>`;
+  else body = `
+    <div class="lb-head"><span>#</span><span>Player</span><span>Record</span><span>Finish</span><span>NRR</span><span>When</span></div>
+    ${rows.map(r => boardRow(r, lb.open === r.runId, you && r.runId === you.runId)).join('')}
+    ${you && !youInTop ? `<div class="lb-gap">· · ·</div>${boardRow(you, lb.open === you.runId, true)}` : ''}`;
+
+  return `
+  <section class="board">
+    <h1 class="page-title">Leaderboard</h1>
+    <p class="page-sub">Server-verified seasons only. Ranked by wins, then playoff finish, then NRR.</p>
+    <div class="board-controls">
+      <div class="seg">${chip('period', 'day', 'Today')}${chip('period', 'week', 'This week')}${chip('period', 'all', 'All-time')}</div>
+      <div class="seg">${Object.entries(DIFFICULTY).map(([k, v]) => chip('difficulty', k, v.name)).join('')}</div>
+      <div class="seg wrap">${chip('era', 'any', 'Any era')}${ERAS.map(e => chip('era', e.id, e.name)).join('')}</div>
+    </div>
+    <div class="board-me">
+      <span>Playing as <b>${esc(nick || 'Anonymous')}</b></span>
+      <button class="link" data-action="edit-nickname">${nick ? 'Change name' : 'Set a name'}</button>
+      <button class="link" data-action="myruns">My runs →</button>
+      ${data ? `<span class="muted">${data.total} ranked run${data.total === 1 ? '' : 's'}${lb.status === 'loading' ? ' · refreshing…' : ''}</span>` : ''}
+    </div>
+    <div class="card board-card">${body}</div>
+    <p class="hint center">"Today" and "This week" reset at midnight IST (weeks start Monday). Runs with the overseas limit off aren't ranked.</p>
+  </section>`;
+}
+
+function renderMyRuns() {
+  const m = S.mine;
+  const nick = store.get('nickname', null);
+  if (!API_BASE) return renderLeaderboard();
+  let body;
+  if (m.status === 'loading' && !m.data) body = '<p class="muted center pad">Loading…</p>';
+  else if (m.status === 'error') body = `<p class="form-error center pad">${esc(m.error)}</p>`;
+  else if (!m.data?.runs.length) body = '<div class="empty"><p>No completed runs from this device yet.</p><button class="btn" data-action="setup">Play a run →</button></div>';
+  else body = m.data.runs.map(r => `
+    <div class="lb-row ${m.open === r.runId ? 'open' : ''}" data-myrun="${r.runId}" role="button" tabindex="0">
+      <div class="my-main">
+        <span class="lb-rec">${r.wins}-${r.losses}</span>
+        <span class="lb-finish">${STAGE_ICON[r.stage] || ''} ${esc(r.finish)}</span>
+        <span class="my-tags"><span class="tag">${esc(DIFFICULTY[r.difficulty].name)}</span>${tagsFor(r)}${r.ranked ? '' : '<span class="tag">Unranked</span>'}</span>
+        <span class="lb-when">${ago(r.completedAt)}</span>
+      </div>
+      ${m.open === r.runId ? `<div class="lb-detail">${xiChips(r.xi)}<p class="hint">Team rating ${r.teamRating} · NRR ${signed(r.nrr)}</p></div>` : ''}
+    </div>`).join('');
+  return `
+  <section class="board">
+    <h1 class="page-title">My runs</h1>
+    <p class="page-sub">Playing as <b>${esc(nick || 'Anonymous')}</b> · <button class="link inline" data-action="edit-nickname">${nick ? 'Change name' : 'Set a name'}</button></p>
+    <div class="card board-card">${body}</div>
+    <div class="center"><button class="btn btn-ghost" data-action="leaderboard">← Leaderboard</button></div>
+    <p class="hint center">Runs are tied to this browser. Clearing site data starts you fresh.</p>
+  </section>`;
+}
+
 function shareText() {
   const r = S.result;
   const league = r.log.filter(m => m.stage === 'League');
@@ -884,7 +1181,8 @@ function render() {
   if (S.screen === 'live' && !L) S.screen = 'season';
   app.innerHTML = {
     home: renderHome, setup: renderSetup, draft: renderDraft, live: renderLive, season: renderSeason,
-  }[S.screen]();
+    leaderboard: renderLeaderboard, myruns: renderMyRuns,
+  }[S.screen]() + renderModal();
   document.body.dataset.screen = S.screen;
 }
 
@@ -898,6 +1196,15 @@ function handle(el) {
     return;
   }
   if (el.dataset.sort) { d.sort = el.dataset.sort; render(); return; }
+  if (el.dataset.lb) {
+    const [key, value] = el.dataset.lb.split(':');
+    S.lb[key] = value;
+    S.lb.open = null;
+    loadLeaderboard();
+    return;
+  }
+  if (el.dataset.run) { toggleRun(el.dataset.run); return; }
+  if (el.dataset.myrun) { S.mine.open = S.mine.open === el.dataset.myrun ? null : el.dataset.myrun; render(); return; }
   if (el.dataset.place !== undefined) { place(PLAYERS[d.selected], Number(el.dataset.place)); return; }
   if (el.dataset.slot !== undefined) {
     const idx = Number(el.dataset.slot);
@@ -906,16 +1213,16 @@ function handle(el) {
       else if (moveTargets(d.moving).includes(idx)) moveTo(d.moving, idx);
       return;
     }
-    if (d.spin && d.selected !== null) { place(PLAYERS[d.selected], idx); return; }
+    if (squadShown() && d.selected !== null) { place(PLAYERS[d.selected], idx); return; }
     if (d.slots[idx].pick) { if (canMove()) { d.moving = idx; render(); } return; }
-    if (S.settings.draftMode === 'position' && !d.spin) { d.target = d.target === idx ? null : idx; render(); }
+    if (posMode() && !d.spin) { act({ t: 'target', s: d.target === idx ? null : idx }); render(); }
     return;
   }
   if (el.dataset.player !== undefined) {
     const p = PLAYERS[Number(el.dataset.player)];
     if (blockReason(p)) return;
     d.moving = null;
-    if (S.settings.draftMode === 'position') { place(p, slotsFor(p)[0].idx); return; }
+    if (posMode()) { place(p, slotsFor(p)[0].idx); return; }
     d.selected = d.selected === p.id ? null : p.id;
     render();
     return;
@@ -927,11 +1234,16 @@ function handle(el) {
       requestAnimationFrame(() => document.getElementById('how')?.scrollIntoView({ behavior: 'smooth' }));
       break;
     case 'setup': go('setup'); break;
-    case 'start': newDraft(); go('draft'); break;
+    case 'start': startRun(); break;
     case 'spin': startSpin(false); break;
     case 'reroll': startSpin(true); break;
-    case 'restart': if (confirm('Restart this run? Your picks will be lost.')) { newDraft(); render(); } break;
-    case 'simulate': runSeason(); break;
+    case 'restart': if (confirm('Restart this run? Your picks will be lost.')) startRun(); break;
+    case 'simulate': simulate(); break;
+    case 'leaderboard': go('leaderboard'); break;
+    case 'myruns': go('myruns'); break;
+    case 'edit-nickname': openNicknameModal('nickname-edit'); break;
+    case 'save-nickname': saveNickname(); break;
+    case 'skip-nickname': skipNickname(); break;
     case 'share': share(); break;
     case 'pause': togglePause(); break;
     case 'speed': setSpeed(); break;
@@ -941,7 +1253,7 @@ function handle(el) {
 }
 
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-set],[data-sort],[data-place],[data-slot],[data-player]');
+  const el = e.target.closest('[data-action],[data-set],[data-sort],[data-place],[data-slot],[data-player],[data-lb],[data-run],[data-myrun]');
   if (!el || el.disabled) return;
   if (el.tagName === 'A') e.preventDefault();
   // A click on a place button inside a player card shouldn't also toggle the card.
@@ -950,6 +1262,11 @@ document.addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', e => {
+  if (S.modal) {
+    if (e.key === 'Enter' && e.target.id === 'nick-input') { e.preventDefault(); saveNickname(); }
+    else if (e.key === 'Escape') skipNickname();
+    return;
+  }
   if (e.key === 'Enter' && e.target.matches('[role="button"]')) { handle(e.target); return; }
   if (S.screen === 'live' && L) {
     if (e.code === 'Space') { e.preventDefault(); togglePause(); }
@@ -965,3 +1282,4 @@ document.addEventListener('keydown', e => {
 });
 
 render();
+loadTop3();
