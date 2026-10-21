@@ -40,7 +40,10 @@ const S = {
 
 const app = document.getElementById('app');
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ratingsVisible = () => S.settings.difficulty !== 'hard' && S.settings.showRatings;
+const ratingsHiddenWhileDrafting = () => S.settings.difficulty === 'hard' || !S.settings.showRatings;
+// Hard and blind modes hide ratings during the draft, then reveal them once the XI is complete.
+const draftDone = () => S.draft && D.isComplete(S.draft) && ['draft', 'live', 'season'].includes(S.screen);
+const ratingsVisible = () => !ratingsHiddenWhileDrafting() || draftDone();
 const era = () => ERAS.find(e => e.id === S.settings.era) ?? ERAS[0];
 const combo = () => COMBOS.find(c => c.id === S.settings.combo) ?? COMBOS[0];
 
@@ -624,6 +627,7 @@ function renderReady() {
   <div class="ready">
     <div class="label">Squad complete</div>
     <h2>Your XI is ready</h2>
+    ${ratingsHiddenWhileDrafting() ? '<p class="reveal-note">🔓 Ratings revealed. Here’s what you drafted blind.</p>' : ''}
     ${bar('Batting', u.bat)}
     ${bar('Bowling', u.bowl)}
     ${bar('Team rating', u.ovr)}
@@ -1174,12 +1178,32 @@ function renderMyRuns() {
   </section>`;
 }
 
+// e.g. "Hard · Balanced · All-time · Season ratings · Squad First", plus any non-standard rules.
+function modeSummary(st) {
+  const extras = [
+    st.difficulty !== 'hard' && !st.showRatings ? 'Blind (ratings hidden)' : null,
+    st.impact ? null : 'No Impact Player',
+    st.overseasCap ? null : 'No overseas limit',
+  ].filter(Boolean);
+  return [
+    DIFFICULTY[st.difficulty].name,
+    COMBOS.find(c => c.id === st.combo)?.name,
+    `${ERAS.find(e => e.id === st.era)?.name ?? 'All-time'} era`,
+    st.ratingMode === 'prime' ? 'Prime ratings' : 'Season ratings',
+    st.draftMode === 'position' ? 'Position First' : 'Squad First',
+    ...extras,
+  ].join(' · ');
+}
+
 function shareText() {
   const r = S.result;
   const league = r.log.filter(m => m.stage === 'League');
   const lines = [
     `🏏 14-0 · All-Time IPL XI`,
-    `League: ${r.wins}-${r.losses} (${ordinal(r.position)}) · ${r.finish}${r.champion ? ' 🏆' : ''}`,
+    `⚙️ ${modeSummary(S.draft.settings)}`,
+    r.position <= 4
+      ? `League: ${r.wins}-${r.losses} (${ordinal(r.position)}) · ${r.finish}${r.champion ? ' 🏆' : ''}`
+      : `League: ${r.wins}-${r.losses} · ${r.finish}`,
     league.map(m => (m.won ? '🟩' : '🟥')).join(''),
     '',
     ...S.draft.slots.map(s => `${s.type === 'IMP' ? 'IMP' : SLOTS[s.type].short}: ${s.pick.p.name} (${seasonTag(s.pick.team, s.pick.year)})`),

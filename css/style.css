@@ -284,6 +284,7 @@ h3.label { margin: 28px 0 10px; }
 }
 .ready { padding: 28px; border-radius: 18px; background: var(--surface); border: 1px solid var(--border); }
 .ready h2 { margin: 4px 0 20px; font-size: 28px; letter-spacing: -0.02em; }
+.reveal-note { margin: -10px 0 16px; font-size: 13px; color: var(--accent-2); }
 .warnbox { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.35); padding: 10px 14px; border-radius: 10px; font-size: 13px; }
 
 .meter { margin: 12px 0; }
