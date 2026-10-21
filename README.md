@@ -46,9 +46,9 @@ Everything runs on Cloudflare under **unbeatenxi.tech** (domain registered at Ho
 | Leaderboard API | https://api.unbeatenxi.tech | `cd worker && npm install && npm run deploy` |
 | Database | D1 `unbeaten` (APAC) | Schema changes: new file in `worker/migrations/`, then `npm run migrate:remote` in `worker/` |
 
-The old addresses still work: https://realnihal.github.io/unbeaten (GitHub Pages, updated on push to `master`) and the API's workers.dev URL. When the API and the game logic change together, deploy the API first, then the site.
+https://realnihal.github.io/unbeaten (GitHub Pages, updated on push to `master`) redirects to unbeatenxi.tech, carrying the player's saved data in the URL fragment so their nickname and runs follow them. The API's old workers.dev URL still works. When the API and the game logic change together, deploy the API first, then the site.
 
-Analytics: Cloudflare injects Web Analytics automatically on unbeatenxi.tech; the GitHub Pages copy loads its own beacon from `index.html`.
+Analytics: Cloudflare injects Web Analytics automatically on unbeatenxi.tech.
 
 **Changing ratings or rules:** player data changes bump `ENGINE_VERSION` automatically. For logic changes, bump `ENGINE_LOGIC_VERSION` in `js/engine.js` and redeploy the Worker, or replays will disagree.
 

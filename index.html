@@ -2,8 +2,41 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <script>
+    // unbeatenxi.tech is the canonical site. The old GitHub Pages copy redirects there, carrying the
+    // player's saved data (player ID, nickname, stats) in the URL fragment, which never reaches a
+    // server. The new site imports it without overwriting anything it already has, then drops the
+    // fragment from the address bar.
+    (function () {
+      var PREFIX = 'ipl14-';
+      if (location.hostname === 'realnihal.github.io') {
+        var data = {};
+        try {
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k.indexOf(PREFIX) === 0) data[k] = localStorage.getItem(k);
+          }
+        } catch (e) { /* storage unavailable */ }
+        var carry = Object.keys(data).length
+          ? '#import=' + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(data)))))
+          : '';
+        location.replace('https://unbeatenxi.tech/' + carry);
+        return;
+      }
+      if (location.hash.indexOf('#import=') === 0) {
+        try {
+          var imported = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(location.hash.slice(8))))));
+          Object.keys(imported).forEach(function (k) {
+            if (k.indexOf(PREFIX) === 0 && localStorage.getItem(k) === null) localStorage.setItem(k, imported[k]);
+          });
+        } catch (e) { /* bad or partial import: start fresh */ }
+        history.replaceState(null, '', location.pathname + location.search);
+      }
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>14-0 | Build an All-Time IPL XI</title>
+  <link rel="canonical" href="https://unbeatenxi.tech/">
   <meta name="description" content="Spin the wheel, draft an all-time IPL XI from every franchise and season, then simulate a 14-game league season. Can you go 14-0?">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏏</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,21 +62,6 @@
   </footer>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="js/app.js"></script>
-  <!-- Cloudflare Web Analytics: cookieless visit counts. On unbeatenxi.tech Cloudflare injects the
-       beacon itself (the zone is proxied), so this manual one only runs on the GitHub Pages copy. -->
-  <script>
-    (function () {
-      var tokens = {
-        'realnihal.github.io': 'eb6a725b34e9481b937f3e31331d44d4'
-      };
-      var token = tokens[location.hostname];
-      if (!token) return;
-      var s = document.createElement('script');
-      s.defer = true;
-      s.src = 'https://static.cloudflareinsights.com/beacon.min.js';
-      s.setAttribute('data-cf-beacon', JSON.stringify({ token: token }));
-      document.body.appendChild(s);
-    })();
-  </script>
+  <!-- Cloudflare injects Web Analytics automatically on unbeatenxi.tech. -->
 </body>
 </html>
