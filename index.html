@@ -29,7 +29,21 @@
   </footer>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="js/app.js"></script>
-  <!-- Cloudflare Web Analytics: cookieless visit counts -->
-  <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "eb6a725b34e9481b937f3e31331d44d4"}'></script>
+  <!-- Cloudflare Web Analytics: cookieless visit counts. On unbeatenxi.tech Cloudflare injects the
+       beacon itself (the zone is proxied), so this manual one only runs on the GitHub Pages copy. -->
+  <script>
+    (function () {
+      var tokens = {
+        'realnihal.github.io': 'eb6a725b34e9481b937f3e31331d44d4'
+      };
+      var token = tokens[location.hostname];
+      if (!token) return;
+      var s = document.createElement('script');
+      s.defer = true;
+      s.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+      s.setAttribute('data-cf-beacon', JSON.stringify({ token: token }));
+      document.body.appendChild(s);
+    })();
+  </script>
 </body>
 </html>

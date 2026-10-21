@@ -1,0 +1,16 @@
+// The game site: a static-assets-only Worker serving the files copied into dist/ (index.html, css/, js/).
+// The leaderboard API is a separate Worker in worker/. Deploy with:
+//   npm run deploy:site
+{
+  "$schema": "./worker/node_modules/wrangler/config-schema.json",
+  "name": "unbeaten-site",
+  "compatibility_date": "2026-10-01",
+  "routes": [
+    { "pattern": "unbeatenxi.tech", "custom_domain": true },
+    { "pattern": "www.unbeatenxi.tech", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

@@ -36,15 +36,19 @@ npx wrangler dev --port 8787
 
 The game uses `http://localhost:8787` automatically when served from localhost.
 
-The API is deployed at https://unbeaten-api.unbeaten-api.workers.dev (D1 database `unbeaten`, APAC). To redeploy after changing `worker/` or the shared `js/engine.js` / `js/draft.js` / `js/data.js`:
+## Deployment
 
-```bash
-cd worker
-npm install
-npm run deploy
-```
+Everything runs on Cloudflare under **unbeatenxi.tech** (domain registered at Hostinger, nameservers pointed to Cloudflare):
 
-Schema changes go in a new file under `worker/migrations/`, applied with `npm run migrate:remote`. Push the site after the Worker is live, so the two versions match.
+| What | Where | Deploy |
+|---|---|---|
+| Game site | https://unbeatenxi.tech (and www) | `npm run deploy:site` from the repo root (builds `dist/`, then deploys `wrangler.jsonc`) |
+| Leaderboard API | https://api.unbeatenxi.tech | `cd worker && npm install && npm run deploy` |
+| Database | D1 `unbeaten` (APAC) | Schema changes: new file in `worker/migrations/`, then `npm run migrate:remote` in `worker/` |
+
+The old addresses still work: https://realnihal.github.io/unbeaten (GitHub Pages, updated on push to `master`) and the API's workers.dev URL. When the API and the game logic change together, deploy the API first, then the site.
+
+Analytics: Cloudflare injects Web Analytics automatically on unbeatenxi.tech; the GitHub Pages copy loads its own beacon from `index.html`.
 
 **Changing ratings or rules:** player data changes bump `ENGINE_VERSION` automatically. For logic changes, bump `ENGINE_LOGIC_VERSION` in `js/engine.js` and redeploy the Worker, or replays will disagree.
 

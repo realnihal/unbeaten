@@ -1,6 +1,10 @@
 name = "unbeaten-api"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
+routes = [{ pattern = "api.unbeatenxi.tech", custom_domain = true }]
+# Keep the old workers.dev URL working for clients still pointing at it.
+workers_dev = true
+preview_urls = false
 
 [[d1_databases]]
 binding = "DB"
@@ -9,5 +13,5 @@ database_id = "c790a22e-9e61-44a9-997a-a975d6262e3d"
 migrations_dir = "migrations"
 
 [vars]
-ALLOWED_ORIGINS = "https://realnihal.github.io,http://localhost:5173"
+ALLOWED_ORIGINS = "https://unbeatenxi.tech,https://www.unbeatenxi.tech,https://realnihal.github.io,http://localhost:5173"
 # Set a real salt in production with: npx wrangler secret put IP_SALT

@@ -1,1 +1,9 @@
-{ "type": "module", "private": true, "scripts": { "test": "node --test tests/" } }
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/",
+    "build:site": "rm -rf dist && mkdir dist && cp -R index.html css js dist/ && find dist -name .DS_Store -delete",
+    "deploy:site": "npm run build:site && ./worker/node_modules/.bin/wrangler deploy -c wrangler.jsonc"
+  }
+}
