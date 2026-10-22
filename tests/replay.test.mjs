@@ -95,6 +95,7 @@ test('tampered logs are rejected', () => {
   // A different seed means the spins no longer match the picks.
   assert.throws(() => replayDraft(settings, 'other-seed', actions), DraftError);
 
-  // Unfinished drafts can't be submitted.
-  assert.throws(() => replayDraft(settings, seed, actions.slice(0, -1)), DraftError);
+  // Unfinished drafts can't be submitted. Cut before the final pick (the log can end with a move).
+  const lastPick = actions.map(a => a.t).lastIndexOf('pick');
+  assert.throws(() => replayDraft(settings, seed, actions.slice(0, lastPick)), DraftError);
 });

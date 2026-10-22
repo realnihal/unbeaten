@@ -186,12 +186,20 @@ function animateReel(done) {
   // Timers rather than requestAnimationFrame so the spin still resolves in a background tab.
   const start = Date.now();
   const duration = 1500;
-  const tick = () => {
-    const t = (Date.now() - start) / duration;
-    if (t >= 1) { done(); return; }
-    const ts = all[Math.floor(Math.random() * all.length)];
+  const show = ts => {
     if (teamEl) { teamEl.textContent = teamName(ts.team, ts.year); teamEl.style.color = teamColor(ts.team); }
     if (yearEl) yearEl.textContent = ts.year;
+  };
+  const tick = () => {
+    const t = (Date.now() - start) / duration;
+    if (t >= 1) {
+      // Land on the squad that was actually drawn and hold it for a moment before revealing it.
+      show(S.draft.spin);
+      document.querySelector('.reel')?.classList.add('landed');
+      setTimeout(done, 450);
+      return;
+    }
+    show(all[Math.floor(Math.random() * all.length)]);
     setTimeout(tick, 40 + 260 * t * t);
   };
   tick();
@@ -991,12 +999,12 @@ function renderLive() {
   return `
   <section class="live">
     <div class="live-top">
-      <div>
+      <div data-part="info">
         <div class="label">${esc(title)}</div>
         <div class="live-record">${w}<span>-</span>${shown.length - w}</div>
         <div class="dots">${league.map((m, i) => `<span class="${i < revealed ? (m.won ? 'w' : 'l') : 'pending'}"></span>`).join('')}</div>
       </div>
-      <div class="live-controls">
+      <div class="live-controls" data-part="controls">
         <button class="btn btn-ghost btn-small" data-action="pause">${L.paused ? '▶ Resume' : '❚❚ Pause'}</button>
         <button class="btn btn-ghost btn-small" data-action="speed" title="Playback speed">${speed()}×</button>
         ${inLeague ? '<button class="btn btn-outline btn-small" data-action="skip-playoffs">Skip to playoffs ⏭</button>' : ''}
@@ -1004,11 +1012,11 @@ function renderLive() {
       </div>
     </div>
     <div class="live-grid">
-      <div class="live-main">
+      <div class="live-main" data-part="main">
         ${f.m ? liveMatchCard(f) : liveInfoCard(f, r)}
         ${elsewhere}${bracket}
       </div>
-      <div class="card">
+      <div class="card" data-part="table">
         <h3>Points table ${revealed ? `<small>· you're ${ordinal(pos)}</small>` : ''}</h3>
         <table class="table">
           <thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>NRR</th><th>Pts</th></tr></thead>
@@ -1230,10 +1238,27 @@ async function share() {
 
 // ---------- Render & events ----------
 
+// During playback the screen redraws every ~130 ms. Replacing the whole page each time would swap
+// out the control buttons between a press and its release, so clicks on them would get lost.
+// Instead, only sections whose markup changed are replaced.
+function patchLive(html) {
+  const next = document.createElement('div');
+  next.innerHTML = html;
+  for (const part of next.querySelectorAll('[data-part]')) {
+    const current = app.querySelector(`[data-part="${part.dataset.part}"]`);
+    if (!current) { app.innerHTML = html; return; }
+    if (current.innerHTML !== part.innerHTML) current.replaceWith(part.cloneNode(true));
+  }
+}
+
 function render() {
   if (S.screen === 'draft' && !S.draft) S.screen = 'setup';
   if ((S.screen === 'season' || S.screen === 'live') && !S.result) S.screen = 'home';
   if (S.screen === 'live' && !L) S.screen = 'season';
+  if (S.screen === 'live' && document.body.dataset.screen === 'live' && app.querySelector('.live')) {
+    patchLive(renderLive());
+    return;
+  }
   app.innerHTML = {
     home: renderHome, setup: renderSetup, draft: renderDraft, live: renderLive, season: renderSeason,
     leaderboard: renderLeaderboard, myruns: renderMyRuns,
